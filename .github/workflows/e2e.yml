@@ -1,21 +1,62 @@
 name: E2E Tests
 
 on:
+  push:
+    branches: [main]
   pull_request:
   workflow_dispatch:
+
+permissions:
+  contents: read
 
 jobs:
   e2e:
     name: ssh through the plugin
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - name: Clone the code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Setup Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
 
       - name: Run E2E tests
-        run: make test-e2e CONTAINER_TOOL=docker
+        run: make test-e2e
+
+  kind:
+    name: ssh through operator ${{ matrix.operator }} and traefik on kind
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        # The oldest operator release the README supports, and the latest.
+        operator: ["0.3.0", "0.4.1"]
+    steps:
+      - name: Clone the code
+        uses: actions/checkout@v7
+
+      - name: Setup Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+
+      - name: Install Kind
+        run: |
+          curl -fsSLo ./kind https://kind.sigs.k8s.io/dl/v0.33.0/kind-linux-amd64
+          chmod +x ./kind
+          sudo mv ./kind /usr/local/bin/kind
+
+      - name: Run the Kind E2E tests
+        run: make test-e2e-kind-full E2E_OPERATOR_CHART_VERSION=${{ matrix.operator }}
+
+      - name: Keep the cluster logs of a failed run
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: kind-logs-${{ matrix.operator }}
+          path: bin/kind-logs
+          if-no-files-found: ignore

@@ -1,0 +1,11 @@
+# Build output
+bin/
+
+# Test binaries and coverage
+*.test
+*.out
+coverage.*
+
+# IDE and OS files
+.idea/
+.DS_Store

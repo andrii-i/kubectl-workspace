@@ -1,0 +1,56 @@
+version: "2"
+run:
+  allow-parallel-runners: true
+  build-tags:
+    - e2e
+linters:
+  default: none
+  enable:
+    - copyloopvar
+    - dupl
+    - errcheck
+    - goconst
+    - gocyclo
+    - govet
+    - ineffassign
+    - lll
+    - misspell
+    - nakedret
+    - prealloc
+    - revive
+    - staticcheck
+    - unconvert
+    - unparam
+    - unused
+  settings:
+    errcheck:
+      exclude-functions:
+        - (*github.com/gorilla/websocket.Conn).Close
+        - (net.Conn).Close
+    revive:
+      rules:
+        - name: comment-spacings
+        - name: import-shadowing
+        - name: var-naming
+          arguments:
+            - ["ID", "API", "HTTP", "JSON", "RPC", "CORS", "UI", "URL", "DNS", "DB", "WS", "TCP"]
+        - name: exported
+        - name: if-return
+        - name: increment-decrement
+        - name: var-declaration
+        - name: package-comments
+        - name: unexported-naming
+  exclusions:
+    generated: lax
+    rules:
+      - linters:
+          - dupl
+          - lll
+          - goconst
+        path: ".*_test\\.go"
+formatters:
+  enable:
+    - gofmt
+    - goimports
+  exclusions:
+    generated: lax
