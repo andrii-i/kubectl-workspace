@@ -81,7 +81,10 @@ the operator's dependency graph out of this binary.
 - The alias is parsed from the right. The suffix, the cluster and the namespace are
   single labels; the workspace name may contain dots. The kubeconfig context is not
   in the alias, because EKS context names contain `:` and `/`; the entry carries it,
-  and the kubeconfig file when the user chose one.
+  and the kubeconfig file when the user chose one. A context named like an EKS
+  cluster ARN gets the cluster name inside the ARN as its label by default, and
+  `open` reads the label back from the entry written for the context and kubeconfig,
+  so a label chosen by hand is typed once, at `ssh-config --write`.
 - The entry goes before the first `Host` or `Match` block and the comment lines directly
   above it, and after everything else above them. A `Host` block runs to the next `Host`
   or `Match`, so an entry placed above a top-level `Include` would capture the included

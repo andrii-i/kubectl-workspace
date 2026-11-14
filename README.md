@@ -35,9 +35,11 @@ Host *.<cluster>.jk8s
 # kubectl-workspace: end <cluster>
 ```
 
-`<cluster>` is the context name; pass `--cluster-name` when the context is named
-like an EKS ARN, which cannot be part of a host name. Running the command again
-replaces the entry. From then on every workspace in the cluster is an SSH host:
+`<cluster>` is the context name, or for a context named like an EKS cluster ARN,
+which cannot be a host-name label itself, the cluster name inside the ARN;
+`--cluster-name` picks another name. Running the command again replaces the entry for
+the same cluster name, `--remove` deletes it. From then on every workspace in the
+cluster is an SSH host:
 
 ```
 ssh <workspace>.<namespace>.<cluster>.jk8s
@@ -98,12 +100,13 @@ Global flags, on every command:
 | `--ca-file` | system roots | PEM bundle of the ingress certificate authority, see Private certificate authorities |
 | `--insecure-allow-plaintext` | off | Accept a connection URL without TLS from the operator, for a local cluster; the token then travels in plaintext. The operator today always returns `wss` |
 
-`kubectl workspace ssh-config [--write]`, the one-time setup:
+`kubectl workspace ssh-config [--write | --remove]`, the one-time setup:
 
 | Flag | Default | Purpose |
 |------|---------|---------|
 | `--write` | off | Install the entry into the SSH configuration file; without it the entry is printed |
-| `--cluster-name` | the context name | The `<cluster>` label of the aliases |
+| `--remove` | off | Remove the cluster's entry from the SSH configuration file |
+| `--cluster-name` | from the installed entry, else the context name or the cluster name in an EKS ARN | The `<cluster>` label of the aliases |
 | `--ssh-config-file` | `~/.ssh/config` | The file to install into |
 | `--command` | this binary | Path or name of `kubectl-workspace` for the ProxyCommand |
 | `--user` | `jovyan` | SSH user name in the entry |
@@ -116,7 +119,7 @@ Global flags, on every command:
 | Flag | Default | Purpose |
 |------|---------|---------|
 | `-n`, `--namespace` | the context's | Namespace of the workspace |
-| `--cluster-name` | the context name | The `<cluster>` label of the alias |
+| `--cluster-name` | from the installed entry, else the context name or the cluster name in an EKS ARN | The `<cluster>` label of the alias |
 | `--remote-path` | `/home/jovyan` | Folder to open in the workspace |
 | `--ssh-config-file` | `~/.ssh/config` | The file that must hold the cluster's entry |
 | `--editor` | `vscode` | Editor to open the workspace in: `vscode` or `cursor` |
