@@ -6,6 +6,7 @@ Distributed under the terms of the MIT license
 package sshconfig
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -296,5 +297,109 @@ func assertMode(t *testing.T, path string, want os.FileMode) {
 	}
 	if got := info.Mode().Perm(); got != want {
 		t.Errorf("%s has mode %o, want %o", path, got, want)
+	}
+}
+
+func TestEntriesForContext(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config")
+	if entries, err := EntriesForContext(path, "prod", false); err != nil || len(entries) != 0 {
+		t.Fatalf("missing file: entries = %v, %v; want none, nil", entries, err)
+	}
+	arn := "arn:aws:eks:us-west-2:123456789012:cluster/dev"
+	for _, e := range []Entry{
+		testEntry(),
+		{Cluster: "dev", Context: arn, Kubeconfig: "/My Files/kubeconfig", Command: "/My Tools/kubectl-workspace", User: DefaultUser},
+		{Cluster: "dev-two", Context: arn, Command: "/opt/kw", User: DefaultUser},
+	} {
+		if err := Install(path, e); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, tt := range []struct {
+		context string
+		want    []InstalledEntry
+	}{
+		{"prod", []InstalledEntry{{Cluster: "prod", Context: "prod"}}},
+		// Install puts a newer entry before the older one.
+		{arn, []InstalledEntry{{Cluster: "dev-two", Context: arn}, {Cluster: "dev", Context: arn, Kubeconfig: "/My Files/kubeconfig"}}},
+		{"staging", nil},
+	} {
+		entries, err := EntriesForContext(path, tt.context, false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if fmt.Sprint(entries) != fmt.Sprint(tt.want) {
+			t.Errorf("entries for %q = %v, want %v", tt.context, entries, tt.want)
+		}
+	}
+}
+
+func TestEntriesForContextSkipsADamagedEntry(t *testing.T) {
+	path := writeFile(t, startMarker("broken")+"\n  ProxyCommand kw connect --stdio --context prod %h\n")
+	if err := Install(path, testEntry()); err != nil {
+		t.Fatal(err)
+	}
+	entries, err := EntriesForContext(path, "prod", false)
+	if err != nil || len(entries) != 1 || entries[0].Cluster != "prod" {
+		t.Errorf("entries = %v, %v; want the intact entry alone", entries, err)
+	}
+}
+
+// Remove undoes Install: the file ends up as it was, except that one blank line may
+// separate what the entry had split, since Install padded both sides of the entry.
+func TestRemoveUndoesInstall(t *testing.T) {
+	tests := []struct {
+		name, before, after string
+	}{
+		{name: "empty file", before: "", after: ""},
+		{name: "only a block", before: "Host github.com\n  User git\n", after: "Host github.com\n  User git\n"},
+		{name: "options then a block", before: "AddKeysToAgent yes\nHost github.com\n", after: "AddKeysToAgent yes\n\nHost github.com\n"},
+		{name: "options only", before: "AddKeysToAgent yes\n", after: "AddKeysToAgent yes\n"},
+		{name: "crlf", before: "Host a\r\n  User x\r\n", after: "Host a\r\n  User x\r\n"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			path := writeFile(t, tt.before)
+			if err := Install(path, testEntry()); err != nil {
+				t.Fatal(err)
+			}
+			removed, err := Remove(path, "prod")
+			if err != nil || !removed {
+				t.Fatalf("Remove = %v, %v; want true, nil", removed, err)
+			}
+			if got := readFile(t, path); got != tt.after {
+				t.Errorf("after Remove:\n%q\nwant\n%q", got, tt.after)
+			}
+		})
+	}
+}
+
+func TestRemoveLeavesOtherClustersAndReportsAbsence(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config")
+	staging := testEntry()
+	staging.Cluster, staging.Context = "staging", "staging"
+	for _, e := range []Entry{testEntry(), staging} {
+		if err := Install(path, e); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if removed, err := Remove(path, "prod"); err != nil || !removed {
+		t.Fatalf("Remove prod = %v, %v", removed, err)
+	}
+	if got := readFile(t, path); got != staging.Render() {
+		t.Errorf("after removing prod:\n%s\nwant the staging entry alone", got)
+	}
+	if removed, err := Remove(path, "prod"); err != nil || removed {
+		t.Errorf("second Remove = %v, %v; want false, nil", removed, err)
+	}
+	if removed, err := Remove(filepath.Join(t.TempDir(), "none"), "prod"); err != nil || removed {
+		t.Errorf("Remove on a missing file = %v, %v; want false, nil", removed, err)
+	}
+}
+
+func TestRemoveRejectsAPartialEntry(t *testing.T) {
+	path := writeFile(t, endMarker("prod")+"\n")
+	if _, err := Remove(path, "prod"); err == nil || !strings.Contains(err.Error(), "remove it by hand") {
+		t.Errorf("error = %v, want a request to repair the file by hand", err)
 	}
 }

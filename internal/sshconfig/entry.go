@@ -151,3 +151,40 @@ func WindowsQuote(s string) string {
 	}
 	return s
 }
+
+// SplitArgs splits a rendered ProxyCommand line back into the arguments Render
+// quoted: double quotes group a value, a backslash escapes the next byte inside them
+// in ShellQuote's form while WindowsQuote keeps backslashes, and a doubled percent
+// sign is one again.
+func SplitArgs(line string, windows bool) []string {
+	var words []string
+	var current strings.Builder
+	inWord, quoted := false, false
+	for i := 0; i < len(line); i++ {
+		c := line[i]
+		switch {
+		case quoted && !windows && c == '\\' && i+1 < len(line):
+			i++
+			current.WriteByte(line[i])
+		case c == '"':
+			quoted = !quoted
+			inWord = true
+		case !quoted && (c == ' ' || c == '\t'):
+			if inWord {
+				words = append(words, current.String())
+				current.Reset()
+				inWord = false
+			}
+		default:
+			current.WriteByte(c)
+			inWord = true
+		}
+	}
+	if inWord {
+		words = append(words, current.String())
+	}
+	for i, w := range words {
+		words[i] = strings.ReplaceAll(w, "%%", "%")
+	}
+	return words
+}

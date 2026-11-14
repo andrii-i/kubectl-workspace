@@ -65,6 +65,113 @@ func Installed(path, cluster string) (bool, error) {
 	return start >= 0, nil
 }
 
+// InstalledEntry is what the lookup reads back from an entry: its cluster label and
+// the context and kubeconfig file its ProxyCommand runs connect with, the kubeconfig
+// empty when connect uses the default lookup.
+type InstalledEntry struct {
+	Cluster    string
+	Context    string
+	Kubeconfig string
+}
+
+// EntriesForContext returns the entries in the file at path whose ProxyCommand runs
+// connect with contextName, in file order. windows selects the quoting the entries
+// were written with. An entry with broken markers is skipped here; Install and Remove
+// report it when they are asked for that cluster.
+func EntriesForContext(path, contextName string, windows bool) ([]InstalledEntry, error) {
+	path, err := resolveTarget(path)
+	if err != nil {
+		return nil, err
+	}
+	content, _, err := read(path)
+	if err != nil {
+		return nil, err
+	}
+	lines := splitLines(content)
+	var entries []InstalledEntry
+	for i := 0; i < len(lines); i++ {
+		cluster, ok := strings.CutPrefix(strings.TrimSpace(lines[i]), startMarkerPrefix)
+		if !ok {
+			continue
+		}
+		start, end, err := findEntry(lines, cluster)
+		if err != nil {
+			continue
+		}
+		entry := readEntry(cluster, lines[start:end+1], windows)
+		if entry.Context == contextName {
+			entries = append(entries, entry)
+		}
+		i = end
+	}
+	return entries, nil
+}
+
+// readEntry reads the connect flags out of an entry's ProxyCommand line.
+func readEntry(cluster string, block []string, windows bool) InstalledEntry {
+	entry := InstalledEntry{Cluster: cluster}
+	for _, line := range block {
+		rest, ok := strings.CutPrefix(strings.TrimSpace(line), "ProxyCommand ")
+		if !ok {
+			continue
+		}
+		args := SplitArgs(rest, windows)
+		for i := 0; i+1 < len(args); i++ {
+			switch args[i] {
+			case "--context":
+				entry.Context = args[i+1]
+			case "--kubeconfig":
+				entry.Kubeconfig = args[i+1]
+			}
+		}
+	}
+	return entry
+}
+
+// Remove deletes the entry for cluster from the file at path and reports whether
+// there was one. Of the blank lines Install put around the entry, one goes with it,
+// so its former neighbours end up separated by at most one.
+func Remove(path, cluster string) (bool, error) {
+	path, err := resolveTarget(path)
+	if err != nil {
+		return false, err
+	}
+	content, mode, err := read(path)
+	if err != nil {
+		return false, err
+	}
+	lines := splitLines(content)
+	start, end, err := findEntry(lines, cluster)
+	if err != nil {
+		return false, fmt.Errorf("%s: %w", path, err)
+	}
+	if start < 0 {
+		return false, nil
+	}
+	out := make([]string, 0, len(lines)-(end-start+1))
+	out = append(out, lines[:start]...)
+	out = append(out, lines[end+1:]...)
+	switch {
+	case start < len(out) && out[start] == "" && (start == 0 || out[start-1] == ""):
+		out = append(out[:start], out[start+1:]...)
+	case start == len(out) && start > 0 && out[start-1] == "":
+		out = out[:start-1]
+	}
+	if len(out) == 0 {
+		return true, write(path, "", mode)
+	}
+	newline := lineEnding(content)
+	return true, write(path, strings.Join(out, newline)+newline, mode)
+}
+
+// lineEnding returns the line ending the content uses, so a rewrite keeps it.
+func lineEnding(content string) string {
+	if strings.Contains(content, "\r\n") {
+		return "\r\n"
+	}
+	return "\n"
+}
+
 // resolveTarget follows a symlinked configuration file, which dotfiles setups
 // have, so the rename in write replaces the file OpenSSH reads and not the link.
 func resolveTarget(path string) (string, error) {
@@ -130,10 +237,7 @@ func write(path, content string, mode os.FileMode) error {
 
 // merge returns the configuration text with the entry in place.
 func merge(content string, e Entry) (string, error) {
-	newline := "\n"
-	if strings.Contains(content, "\r\n") {
-		newline = "\r\n"
-	}
+	newline := lineEnding(content)
 	lines := splitLines(content)
 	entry := splitLines(e.Render())
 
