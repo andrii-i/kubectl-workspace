@@ -66,23 +66,169 @@ func TestSSHConfigWritesThePlaintextOptInIntoTheEntry(t *testing.T) {
 	}
 }
 
-func TestSSHConfigNeedsAClusterNameForAnARNContext(t *testing.T) {
+// An EKS context is named by its ARN, which cannot be a host-name label, so the
+// cluster name inside the ARN serves unless --cluster-name says otherwise.
+func TestSSHConfigNamesTheClusterAfterTheEKSContext(t *testing.T) {
 	kubeconfig := staticKubeconfig(t)
-
-	_, err := run(t, "ssh-config", "--kubeconfig", kubeconfig, "--context", testutil.ARNContext, "--command", kwCommand)
-	if err == nil || !strings.Contains(err.Error(), "--cluster-name") {
-		t.Fatalf("error = %v, want a hint to pass --cluster-name", err)
+	wantLine := "ProxyCommand " + kwCommand + " connect --stdio --kubeconfig " + kubeconfig +
+		" --context " + testutil.ARNContext + " %h"
+	for _, tt := range []struct {
+		name  string
+		extra []string
+		host  string
+	}{
+		{name: "the ARN's cluster name by default", host: "Host *.dev.jk8s\n"},
+		{name: "--cluster-name overrides", extra: []string{"--cluster-name", "jd"}, host: "Host *.jd.jk8s\n"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			args := append([]string{"ssh-config", "--kubeconfig", kubeconfig, "--context", testutil.ARNContext,
+				"--command", kwCommand}, tt.extra...)
+			stdout, err := run(t, args...)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !strings.Contains(stdout, tt.host) || !strings.Contains(stdout, wantLine) {
+				t.Errorf("stdout =\n%s\nwant %q and %q", stdout, tt.host, wantLine)
+			}
+		})
 	}
+}
 
-	stdout, err := run(t, "ssh-config", "--kubeconfig", kubeconfig, "--context", testutil.ARNContext,
-		"--command", kwCommand, "--cluster-name", "dev")
+// Running ssh-config --write again replaces the entry, which holds when the label
+// chosen the first time is found again without the flag.
+func TestSSHConfigReusesTheLabelOfTheInstalledEntry(t *testing.T) {
+	kubeconfig := staticKubeconfig(t)
+	file := filepath.Join(t.TempDir(), "config")
+	write := func(extra ...string) {
+		args := append([]string{"ssh-config", "--write", "--ssh-config-file", file, "--kubeconfig", kubeconfig,
+			"--context", testutil.ARNContext, "--command", kwCommand}, extra...)
+		if _, err := run(t, args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("--cluster-name", "jd")
+	write("--credential-timeout", "15s")
+	content, err := os.ReadFile(file)
 	if err != nil {
 		t.Fatal(err)
 	}
-	wantLine := "ProxyCommand " + kwCommand + " connect --stdio --kubeconfig " + kubeconfig +
-		" --context " + testutil.ARNContext + " %h"
-	if !strings.Contains(stdout, "Host *.dev.jk8s\n") || !strings.Contains(stdout, wantLine) {
-		t.Errorf("stdout =\n%s\nwant Host *.dev.jk8s and %q", stdout, wantLine)
+	if strings.Count(string(content), "kubectl-workspace: start") != 1 || !strings.Contains(string(content), "Host *.jd.jk8s") ||
+		!strings.Contains(string(content), "--credential-timeout 15s") {
+		t.Errorf("file after the second write:\n%s\nwant one entry, still for jd, with the new timeout", content)
+	}
+
+	stdout, err := run(t, "ssh-config", "--remove", "--ssh-config-file", file, "--kubeconfig", kubeconfig,
+		"--context", testutil.ARNContext)
+	if err != nil || !strings.HasPrefix(stdout, "Removed the entry for Host *.jd.jk8s") {
+		t.Errorf("--remove without the flag: %q, %v; want the jd entry removed", stdout, err)
+	}
+}
+
+func TestSSHConfigLowercasesAnUppercaseEKSClusterName(t *testing.T) {
+	arn := "arn:aws:eks:us-west-2:123456789012:cluster/MyCluster"
+	kubeconfig := testutil.Kubeconfig{Name: arn, Server: "https://127.0.0.1:1", Namespace: "team-a"}.Write(t)
+	stdout, err := run(t, "ssh-config", "--kubeconfig", kubeconfig, "--command", kwCommand)
+	if err != nil || !strings.Contains(stdout, "Host *.mycluster.jk8s\n") {
+		t.Errorf("stdout = %q, %v; want the lowercased cluster name, as OpenSSH matches hosts", stdout, err)
+	}
+}
+
+// Installing the same context under a new name leaves the old entry in place; the
+// warning names it and the printed command, run as printed, removes it.
+func TestSSHConfigWarnsAboutAnEntryLeftUnderAnotherName(t *testing.T) {
+	kubeconfig := staticKubeconfig(t)
+	file := filepath.Join(t.TempDir(), "config")
+	base := []string{"ssh-config", "--write", "--ssh-config-file", file, "--kubeconfig", kubeconfig, "--command", kwCommand}
+	if _, err := run(t, base...); err != nil {
+		t.Fatal(err)
+	}
+	_, stderr, err := runWithStderr(t, append(base, "--cluster-name", "jd")...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hint := "kubectl workspace ssh-config --remove --ssh-config-file " + file + " --kubeconfig " + kubeconfig +
+		" --context dev --cluster-name dev"
+	want := "kubectl-workspace: " + file + " also routes context \"dev\" under the cluster name \"dev\"; drop it with: " + hint + "\n"
+	if stderr != want {
+		t.Fatalf("stderr = %q\nwant %q", stderr, want)
+	}
+
+	if _, err := run(t, sshconfig.SplitArgs(hint, runtime.GOOS == goosWindows)[2:]...); err != nil {
+		t.Fatalf("the printed command failed: %v", err)
+	}
+	content, err := os.ReadFile(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Count(string(content), "kubectl-workspace: start") != 1 || !strings.Contains(string(content), "Host *.jd.jk8s") {
+		t.Errorf("file after the printed command:\n%s\nwant the jd entry alone", content)
+	}
+}
+
+func TestSSHConfigPrintsWithoutReadingTheFile(t *testing.T) {
+	kubeconfig := staticKubeconfig(t)
+	unreadable := filepath.Join(t.TempDir(), "missing", "config")
+	stdout, err := run(t, "ssh-config", "--ssh-config-file", unreadable, "--kubeconfig", kubeconfig, "--command", kwCommand)
+	if err != nil || !strings.Contains(stdout, "Host *.dev.jk8s\n") {
+		t.Errorf("print mode with an absent file: %q, %v; want the entry printed", stdout, err)
+	}
+}
+
+func TestSSHConfigLowercasesTheContextName(t *testing.T) {
+	kubeconfig := testutil.Kubeconfig{Name: "Dev", Server: "https://127.0.0.1:1", Namespace: "team-a"}.Write(t)
+	stdout, err := run(t, "ssh-config", "--kubeconfig", kubeconfig, "--command", kwCommand)
+	if err != nil || !strings.Contains(stdout, "Host *.dev.jk8s\n") || !strings.Contains(stdout, "--context Dev ") {
+		t.Errorf("stdout = %q, %v; want the lowercased label and the context as named", stdout, err)
+	}
+}
+
+func TestSSHConfigNeedsAClusterNameWhenTheContextIsNoLabel(t *testing.T) {
+	kubeconfig := testutil.Kubeconfig{Name: "Dev_Cluster", Server: "https://127.0.0.1:1", Namespace: "team-a"}.Write(t)
+	_, err := run(t, "ssh-config", "--kubeconfig", kubeconfig, "--command", kwCommand)
+	if err == nil || !strings.Contains(err.Error(), "--cluster-name") {
+		t.Fatalf("error = %v, want a hint to pass --cluster-name", err)
+	}
+}
+
+func TestSSHConfigRemovesTheEntry(t *testing.T) {
+	kubeconfig := staticKubeconfig(t)
+	file := filepath.Join(t.TempDir(), "config")
+	if err := os.WriteFile(file, []byte("Host github.com\n  User git\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := run(t, "ssh-config", "--write", "--ssh-config-file", file, "--kubeconfig", kubeconfig,
+		"--command", kwCommand); err != nil {
+		t.Fatal(err)
+	}
+
+	stdout, err := run(t, "ssh-config", "--remove", "--ssh-config-file", file, "--kubeconfig", kubeconfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "Removed the entry for Host *.dev.jk8s from " + file + ".\n"; stdout != want {
+		t.Errorf("stdout = %q, want %q", stdout, want)
+	}
+	if got, err := os.ReadFile(file); err != nil || string(got) != "Host github.com\n  User git\n" {
+		t.Errorf("file after --remove = %q, %v; want the original content", got, err)
+	}
+
+	stdout, err = run(t, "ssh-config", "--remove", "--ssh-config-file", file, "--cluster-name", "dev")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "No entry for cluster \"dev\" in " + file + "; --cluster-name names one under another name.\n"; stdout != want {
+		t.Errorf("stdout = %q, want %q", stdout, want)
+	}
+
+	_, err = run(t, "ssh-config", "--remove", "--write", "--ssh-config-file", file, "--kubeconfig", kubeconfig)
+	if err == nil || !strings.Contains(err.Error(), "none of the others can be") {
+		t.Errorf("error = %v, want --write and --remove refused together", err)
+	}
+
+	// The context is often gone by the time its entry is removed.
+	_, err = run(t, "ssh-config", "--remove", "--ssh-config-file", file, "--kubeconfig", kubeconfig, "--context", "gone")
+	if err == nil || !strings.Contains(err.Error(), "pass --cluster-name to name the entry without its context") {
+		t.Errorf("error = %v, want the flag named as the way around a missing context", err)
 	}
 }
 
@@ -144,7 +290,7 @@ func TestInstalledEntryRunsConnect(t *testing.T) {
 	var proxyCommand []string
 	for _, line := range strings.Split(string(content), "\n") {
 		if rest, ok := strings.CutPrefix(strings.TrimSpace(line), "ProxyCommand "); ok {
-			proxyCommand = shellWords(rest)
+			proxyCommand = sshconfig.SplitArgs(rest, runtime.GOOS == goosWindows)
 		}
 	}
 	if len(proxyCommand) == 0 || proxyCommand[0] != kwCommand {
@@ -162,56 +308,6 @@ func TestInstalledEntryRunsConnect(t *testing.T) {
 	}
 	if upgrade := echo.LastHandshake(t); upgrade.Authorization != "Bearer "+grantedToken {
 		t.Errorf("WebSocket Authorization = %q", upgrade.Authorization)
-	}
-}
-
-// shellWords splits a ProxyCommand line the way the ssh client of this OS does:
-// double quotes group, and a backslash escapes inside them only in ShellQuote's
-// form, since WindowsQuote keeps backslashes verbatim.
-func shellWords(line string) []string {
-	escapes := runtime.GOOS != goosWindows
-	var words []string
-	var current strings.Builder
-	inWord, quoted := false, false
-	for i := 0; i < len(line); i++ {
-		c := line[i]
-		switch {
-		case quoted && escapes && c == '\\' && i+1 < len(line):
-			i++
-			current.WriteByte(line[i])
-		case c == '"':
-			quoted = !quoted
-			inWord = true
-		case !quoted && (c == ' ' || c == '\t'):
-			if inWord {
-				words = append(words, current.String())
-				current.Reset()
-				inWord = false
-			}
-		default:
-			current.WriteByte(c)
-			inWord = true
-		}
-	}
-	if inWord {
-		words = append(words, current.String())
-	}
-	return words
-}
-
-func TestShellWordsUndoesTheEntryQuoting(t *testing.T) {
-	quote := sshconfig.ShellQuote
-	if runtime.GOOS == goosWindows {
-		quote = sshconfig.WindowsQuote
-	}
-	want := []string{"plain", `C:\Users\A Name\kubeconfig`, "/My Files/ws $HOME", "--flag"}
-	quoted := make([]string, len(want))
-	for i, w := range want {
-		quoted[i] = quote(w)
-	}
-	got := shellWords(strings.Join(quoted, " "))
-	if strings.Join(got, "\x00") != strings.Join(want, "\x00") {
-		t.Errorf("shellWords(%q) = %q, want %q", strings.Join(quoted, " "), got, want)
 	}
 }
 

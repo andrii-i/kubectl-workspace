@@ -83,7 +83,11 @@ func (o *openOptions) run(ctx context.Context, workspace string) error {
 	if namespace == "" {
 		namespace = target.Namespace
 	}
-	cluster, err := clusterName(o.clusterName, target.Context)
+	kubeconfig, _, err := pinnedKubeconfig(o.kubeconfig)
+	if err != nil {
+		return err
+	}
+	cluster, err := clusterForContext(o.clusterName, target.Context, kubeconfig, o.sshConfigFile)
 	if err != nil {
 		return err
 	}
@@ -128,7 +132,7 @@ func (o *openOptions) checkEntry(cluster, contextName string) error {
 		return err
 	}
 	if !installed {
-		args := []string{"--write"}
+		args := []string{writeFlag}
 		if o.sshConfigFile != "" {
 			args = append(args, "--ssh-config-file", o.sshConfigFile)
 		}

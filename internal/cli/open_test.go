@@ -8,7 +8,9 @@ package cli
 import (
 	"context"
 	"net/http"
+	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -87,11 +89,17 @@ func TestOpenFailsWithTheSetupCommandWhenTheEntryIsMissing(t *testing.T) {
 			name: "context usable as the cluster name",
 			args: nil,
 			wantHint: "kubectl workspace ssh-config --write --ssh-config-file " + configFile +
-				" --kubeconfig " + kubeconfig + " --context dev",
+				" --kubeconfig " + kubeconfig + " --context dev --cluster-name dev",
 		},
 		{
-			name: "EKS ARN context needs the cluster name",
-			args: []string{"--context", testutil.ARNContext, "--cluster-name", "dev"},
+			name: "EKS ARN context with a chosen cluster name",
+			args: []string{"--context", testutil.ARNContext, "--cluster-name", "jd"},
+			wantHint: "kubectl workspace ssh-config --write --ssh-config-file " + configFile +
+				" --kubeconfig " + kubeconfig + " --context " + testutil.ARNContext + " --cluster-name jd",
+		},
+		{
+			name: "EKS ARN context with the default cluster name",
+			args: []string{"--context", testutil.ARNContext},
 			wantHint: "kubectl workspace ssh-config --write --ssh-config-file " + configFile +
 				" --kubeconfig " + kubeconfig + " --context " + testutil.ARNContext + " --cluster-name dev",
 		},
@@ -112,11 +120,18 @@ func TestOpenFailsWithTheSetupCommandWhenTheEntryIsMissing(t *testing.T) {
 func installedEntry(t *testing.T) string {
 	t.Helper()
 	configFile := filepath.Join(t.TempDir(), "config")
-	entry := sshconfig.Entry{Cluster: "dev", Context: "dev", Command: kwCommand, User: "jovyan"}
+	installEntry(t, configFile, sshconfig.Entry{Cluster: "dev", Context: "dev"})
+	return configFile
+}
+
+// installEntry installs the entry with this OS's quoting, the way ssh-config --write
+// does, filling in the command and the user.
+func installEntry(t *testing.T, configFile string, entry sshconfig.Entry) {
+	t.Helper()
+	entry.Command, entry.User, entry.Windows = kwCommand, "jovyan", runtime.GOOS == goosWindows
 	if err := sshconfig.Install(configFile, entry); err != nil {
 		t.Fatal(err)
 	}
-	return configFile
 }
 
 // recordLaunches replaces the editor launcher for the test and returns the links it received.
@@ -187,5 +202,71 @@ func TestOpenDoesNotLaunchWhenTheOperatorRefuses(t *testing.T) {
 	}
 	if len(*launched) != 0 {
 		t.Error("the editor was launched although the workspace is not reachable")
+	}
+}
+
+// The entry carries the context, so open finds the cluster label a user chose for an
+// EKS context without being told again.
+func TestOpenReadsTheClusterNameFromTheInstalledEntry(t *testing.T) {
+	kubeconfig := staticKubeconfig(t)
+	configFile := filepath.Join(t.TempDir(), "config")
+	install := func(cluster string) {
+		installEntry(t, configFile, sshconfig.Entry{Cluster: cluster, Context: testutil.ARNContext})
+	}
+	open := func() (string, error) {
+		return run(t, "open", "--kubeconfig", kubeconfig, "--context", testutil.ARNContext,
+			"--ssh-config-file", configFile, "--print-only", "ws1")
+	}
+
+	stdout, err := open()
+	if err != nil || !strings.Contains(stdout, "ssh ws1.default.dev.jk8s\n") {
+		t.Errorf("without an entry: stdout = %q, %v; want the ARN's cluster name dev", stdout, err)
+	}
+
+	install("jd")
+	stdout, err = open()
+	if err != nil || !strings.Contains(stdout, "ssh ws1.default.jd.jk8s\n") {
+		t.Errorf("with the entry: stdout = %q, %v; want the entry's cluster name jd", stdout, err)
+	}
+
+	install("jd-two")
+	_, err = open()
+	if err == nil || !strings.Contains(err.Error(), "jd, jd-two") || !strings.Contains(err.Error(), "--cluster-name") {
+		t.Errorf("with two entries: error = %v, want both names and the flag to disambiguate", err)
+	}
+}
+
+// A marker edited by hand can name a cluster the alias cannot carry; the lookup
+// says so and names the flag, as every other failure to pick a label does.
+func TestOpenRefusesAnEditedEntryWhoseNameIsNoLabel(t *testing.T) {
+	configFile := filepath.Join(t.TempDir(), "config")
+	block := "# kubectl-workspace: start My Cluster\nHost *.My Cluster.jk8s\n  ProxyCommand " + kwCommand +
+		" connect --stdio --context dev %h\n# kubectl-workspace: end My Cluster\n"
+	if err := os.WriteFile(configFile, []byte(block), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err := run(t, "open", "--kubeconfig", staticKubeconfig(t), "--ssh-config-file", configFile, "--print-only", "ws1")
+	if err == nil || !strings.Contains(err.Error(), "cannot be an alias label") || !strings.Contains(err.Error(), "--cluster-name") {
+		t.Errorf("error = %v, want the edited name refused with the flag named", err)
+	}
+}
+
+// Two kubeconfig files may name a context alike, so the entry written for the
+// kubeconfig in use wins over one written for another file.
+func TestOpenPrefersTheEntryWrittenForItsKubeconfig(t *testing.T) {
+	first, second := staticKubeconfig(t), staticKubeconfig(t)
+	configFile := filepath.Join(t.TempDir(), "config")
+	for cluster, kubeconfig := range map[string]string{"first": first, "second": second} {
+		installEntry(t, configFile, sshconfig.Entry{Cluster: cluster, Context: "dev", Kubeconfig: kubeconfig})
+	}
+	for cluster, kubeconfig := range map[string]string{"first": first, "second": second} {
+		stdout, err := run(t, "open", "--kubeconfig", kubeconfig, "--ssh-config-file", configFile, "--print-only", "ws1")
+		if err != nil || !strings.Contains(stdout, "ssh ws1.team-a."+cluster+".jk8s\n") {
+			t.Errorf("with %s: stdout = %q, %v; want the alias under %s", kubeconfig, stdout, err, cluster)
+		}
+	}
+	_, err := run(t, "open", "--kubeconfig", staticKubeconfig(t), "--ssh-config-file", configFile, "--print-only", "ws1")
+	if err == nil || !strings.Contains(err.Error(), "first, second") {
+		t.Errorf("with a third kubeconfig: error = %v, want both entries named", err)
 	}
 }

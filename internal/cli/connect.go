@@ -147,7 +147,7 @@ func (o *connectOptions) credentialError(err error, contextName string, alias ss
 		o.kubeconfig, contextName, alias.Cluster, alias.Workspace, "--namespace", alias.Namespace)
 	if signIn != nil {
 		// --write replaces the entry, so the command carries the flags connect knows of.
-		args := []string{"--write", "--credential-timeout", (slowPluginFactor * o.credentialTimeout).String()}
+		args := []string{writeFlag, "--credential-timeout", (slowPluginFactor * o.credentialTimeout).String()}
 		if o.caFile != "" {
 			args = append(args, "--ca-file", o.caFile)
 		}

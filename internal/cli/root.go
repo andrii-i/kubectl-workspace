@@ -14,6 +14,7 @@ import (
 	"io"
 	"os"
 	"os/signal"
+	"regexp"
 	"strings"
 	"syscall"
 	"time"
@@ -117,15 +118,35 @@ reach any workspace in that cluster, and "open" launches VS Code on one.`,
 }
 
 // clusterName resolves the alias label: the --cluster-name flag when given, else
-// the context name, which then has to be a valid label.
+// the context name, or for a context named like an EKS cluster ARN the cluster name
+// inside it, lowercased; either has to be a valid label.
 func clusterName(flag, contextName string) (string, error) {
 	if flag != "" {
 		return flag, sshconfig.ValidateClusterName(flag)
 	}
-	if err := sshconfig.ValidateClusterName(contextName); err != nil {
-		return "", fmt.Errorf("the context name cannot be the cluster name in the alias (%w); pass --cluster-name", err)
+	candidate := contextName
+	if name, ok := eksClusterName(contextName); ok {
+		candidate = name
 	}
-	return contextName, nil
+	// OpenSSH lowercases host names before matching, and ParseAlias with it.
+	candidate = strings.ToLower(candidate)
+	if err := sshconfig.ValidateClusterName(candidate); err != nil {
+		return "", fmt.Errorf("%q cannot be the cluster name in the alias (%w); pass --cluster-name", candidate, err)
+	}
+	return candidate, nil
+}
+
+// eksClusterARN matches the context name `aws eks update-kubeconfig` creates by
+// default, arn:<partition>:eks:<region>:<account>:cluster/<name>.
+var eksClusterARN = regexp.MustCompile(`^arn:[^:]+:eks:[^:]*:[^:]*:cluster/([^/]+)$`)
+
+// eksClusterName returns the cluster name of a context named like an EKS cluster ARN.
+func eksClusterName(contextName string) (string, bool) {
+	m := eksClusterARN.FindStringSubmatch(contextName)
+	if m == nil {
+		return "", false
+	}
+	return m[1], true
 }
 
 func checkCredentialTimeout(d time.Duration) error {

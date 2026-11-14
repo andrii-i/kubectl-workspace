@@ -7,7 +7,6 @@ package cli
 
 import (
 	"fmt"
-	"os"
 	"runtime"
 	"strings"
 	"time"
@@ -21,6 +20,7 @@ import (
 type sshConfigOptions struct {
 	*rootOptions
 	write             bool
+	remove            bool
 	clusterName       string
 	sshConfigFile     string
 	command           string
@@ -33,21 +33,25 @@ type sshConfigOptions struct {
 func newSSHConfigCommand(root *rootOptions) *cobra.Command {
 	o := &sshConfigOptions{rootOptions: root}
 	cmd := &cobra.Command{
-		Use:   "ssh-config [--write]",
-		Short: "Print or install the SSH configuration entry for a cluster",
+		Use:   "ssh-config [--write | --remove]",
+		Short: "Print, install or remove the SSH configuration entry for a cluster",
 		Long: `ssh-config renders the SSH configuration entry that routes every workspace alias
 of one cluster, ` + sshconfig.AliasFormat + `, through
 "kubectl workspace connect". Without --write it prints the entry; with --write it
-installs it in ~/.ssh/config, replacing an earlier entry for the same cluster.
+installs it in ~/.ssh/config, replacing an earlier entry for the same cluster; with
+--remove it deletes the cluster's entry.
 
-The cluster name defaults to the kubeconfig context name when that is a lowercase
-DNS label; contexts named like EKS ARNs need --cluster-name.`,
+The cluster name comes from the entry already installed for the context, else from
+the context name or the cluster name inside a context named like an EKS cluster ARN;
+--cluster-name overrides it.`,
 		Args: cobra.NoArgs,
 		RunE: func(_ *cobra.Command, _ []string) error {
 			return o.run()
 		},
 	}
 	cmd.Flags().BoolVar(&o.write, "write", false, "install the entry into the SSH configuration file")
+	cmd.Flags().BoolVar(&o.remove, "remove", false, "remove the cluster's entry from the SSH configuration file")
+	cmd.MarkFlagsMutuallyExclusive("write", "remove")
 	cmd.Flags().StringVar(&o.clusterName, "cluster-name", "", clusterNameHelp)
 	cmd.Flags().StringVar(&o.sshConfigFile, "ssh-config-file", "", sshConfigFileHelp)
 	cmd.Flags().StringVar(&o.command, "command", "",
@@ -61,6 +65,9 @@ DNS label; contexts named like EKS ARNs need --cluster-name.`,
 }
 
 func (o *sshConfigOptions) run() error {
+	if o.remove {
+		return o.removeEntry()
+	}
 	entry, err := o.entry()
 	if err != nil {
 		return err
@@ -77,8 +84,54 @@ func (o *sshConfigOptions) run() error {
 		return err
 	}
 	_, _ = fmt.Fprintf(o.streams.Out, "Installed the entry for Host %s in %s.\n", entry.HostPattern(), path)
+	removeArgs := []string{"--remove"}
+	if o.sshConfigFile != "" {
+		removeArgs = append(removeArgs, "--ssh-config-file", o.sshConfigFile)
+	}
+	for _, other := range installedClusters(entry.Context, entry.Kubeconfig, o.sshConfigFile) {
+		if other != entry.Cluster {
+			warnf(o.streams.Err, "%s also routes context %q under the cluster name %q; drop it with: %s", path,
+				entry.Context, other, kubectlWorkspaceCommand("ssh-config", o.kubeconfig, entry.Context, other, removeArgs...))
+		}
+	}
 	alias := strings.Replace(sshconfig.AliasFormat, "<cluster>", entry.Cluster, 1)
 	_, _ = fmt.Fprintf(o.streams.Out, "Connect with: ssh %s\n", alias)
+	return nil
+}
+
+// removeEntry deletes the cluster's entry; the cluster is resolved as for --write.
+func (o *sshConfigOptions) removeEntry() error {
+	cluster := o.clusterName
+	if cluster == "" {
+		target, err := o.target()
+		if err != nil {
+			return fmt.Errorf("%w; pass --cluster-name to name the entry without its context", err)
+		}
+		kubeconfig, _, err := pinnedKubeconfig(o.kubeconfig)
+		if err != nil {
+			return err
+		}
+		if cluster, err = clusterForContext("", target.Context, kubeconfig, o.sshConfigFile); err != nil {
+			return err
+		}
+	} else if err := sshconfig.ValidateClusterName(cluster); err != nil {
+		return err
+	}
+	path, err := sshConfigPath(o.sshConfigFile)
+	if err != nil {
+		return err
+	}
+	removed, err := sshconfig.Remove(path, cluster)
+	if err != nil {
+		return err
+	}
+	if !removed {
+		_, _ = fmt.Fprintf(o.streams.Out, "No entry for cluster %q in %s; --cluster-name names one under another name.\n",
+			cluster, path)
+		return nil
+	}
+	host := sshconfig.Entry{Cluster: cluster}.HostPattern()
+	_, _ = fmt.Fprintf(o.streams.Out, "Removed the entry for Host %s from %s.\n", host, path)
 	return nil
 }
 
@@ -91,15 +144,15 @@ func (o *sshConfigOptions) entry() (sshconfig.Entry, error) {
 	if err != nil {
 		return sshconfig.Entry{}, err
 	}
-	cluster, err := clusterName(o.clusterName, target.Context)
+	kubeconfig, err := o.kubeconfigForEntry()
+	if err != nil {
+		return sshconfig.Entry{}, err
+	}
+	cluster, err := clusterForContext(o.clusterName, target.Context, kubeconfig, o.sshConfigFile)
 	if err != nil {
 		return sshconfig.Entry{}, err
 	}
 	command, err := commandForEntry(o.command)
-	if err != nil {
-		return sshconfig.Entry{}, err
-	}
-	kubeconfig, err := o.kubeconfigForEntry()
 	if err != nil {
 		return sshconfig.Entry{}, err
 	}
@@ -135,16 +188,9 @@ func (o *sshConfigOptions) entry() (sshconfig.Entry, error) {
 // kubeconfigForEntry pins the kubeconfig file into the entry; a KUBECONFIG list
 // has no single-flag form and is left to the environment.
 func (o *sshConfigOptions) kubeconfigForEntry() (string, error) {
-	env := os.Getenv("KUBECONFIG")
-	switch {
-	case o.kubeconfig != "":
-		return absPath("kubeconfig", o.kubeconfig)
-	case env == "":
-		return "", nil
-	case strings.Contains(env, string(os.PathListSeparator)):
+	path, list, err := pinnedKubeconfig(o.kubeconfig)
+	if list {
 		warnf(o.streams.Err, "KUBECONFIG lists several files; the entry relies on ssh running with the same KUBECONFIG")
-		return "", nil
-	default:
-		return absPath("kubeconfig", env)
 	}
+	return path, err
 }
