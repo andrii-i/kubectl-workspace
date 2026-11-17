@@ -187,6 +187,21 @@ func TestSSHConfigWarnsAboutAnEntryLeftUnderAnotherName(t *testing.T) {
 	}
 }
 
+// An older entry written without a kubeconfig pin routes the same cluster as a pinned
+// one for the context, by the rule open and --remove apply, so a write under a new name
+// names it too.
+func TestSSHConfigWarnsAboutAnUnpinnedEntryLeftUnderAnotherName(t *testing.T) {
+	kubeconfig := staticKubeconfig(t)
+	file := filepath.Join(t.TempDir(), "config")
+	installEntry(t, file, sshconfig.Entry{Cluster: "first", Context: "dev"})
+	_, stderr, err := runWithStderr(t, "ssh-config", "--write", "--ssh-config-file", file, "--kubeconfig", kubeconfig,
+		"--command", kwCommand, "--cluster-name", "second")
+	want := `also routes context "dev" under the cluster name "first"`
+	if err != nil || !strings.Contains(stderr, want) || !strings.Contains(stderr, "--cluster-name first") {
+		t.Errorf("stderr = %q, %v; want the unpinned entry named with its removal command", stderr, err)
+	}
+}
+
 // A rerun replaces the cluster's own entry, and an entry routing a context of the
 // same name for another kubeconfig file belongs to another cluster; neither draws
 // the warning, whose hint would remove an entry still in use.

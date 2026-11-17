@@ -91,17 +91,26 @@ func (o *sshConfigOptions) run() error {
 	if warning != "" {
 		warnf(o.streams.Err, "%s", warning)
 	}
-	removeArgs := sshConfigHintArgs(removeFlag, o.sshConfigFile)
-	others, _, _ := installedClusters(entry.Context, entry.Kubeconfig, o.sshConfigFile)
-	for _, other := range others {
-		if other != entry.Cluster {
-			warnf(o.streams.Err, "%s also routes context %q under the cluster name %q; drop it with: %s", path,
-				entry.Context, other, kubectlWorkspaceCommand("ssh-config", o.kubeconfig, entry.Context, other, removeArgs...))
-		}
-	}
+	o.warnAboutOtherEntries(path, entry)
 	alias := strings.Replace(sshconfig.AliasFormat, "<cluster>", entry.Cluster, 1)
 	_, _ = fmt.Fprintf(o.streams.Out, "Connect with: ssh %s\n", alias)
 	return nil
+}
+
+// warnAboutOtherEntries names every other intact entry that routes the same cluster as
+// the one just installed, with the command that removes it: the alias under the old
+// name still works, and a later lookup would find two entries.
+func (o *sshConfigOptions) warnAboutOtherEntries(path string, entry sshconfig.Entry) {
+	removeArgs := sshConfigHintArgs(removeFlag, o.sshConfigFile)
+	others, _ := sshconfig.EntriesForContext(path, entry.Context, runtime.GOOS == goosWindows)
+	for _, other := range others {
+		if other.Cluster == entry.Cluster || other.Damaged != nil || routesAnother(other, entry.Context, entry.Kubeconfig) {
+			continue
+		}
+		hint := kubectlWorkspaceCommand("ssh-config", o.kubeconfig, entry.Context, other.Cluster, removeArgs...)
+		warnf(o.streams.Err, "%s also routes context %q under the cluster name %q; drop it with: %s", path,
+			entry.Context, other.Cluster, hint)
+	}
 }
 
 // checkReplacement looks at the entry a --write is about to replace. Under a derived
