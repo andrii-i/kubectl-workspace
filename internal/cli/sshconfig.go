@@ -21,6 +21,7 @@ type sshConfigOptions struct {
 	*rootOptions
 	write             bool
 	remove            bool
+	kubeconfigList    bool
 	clusterName       string
 	sshConfigFile     string
 	command           string
@@ -107,6 +108,11 @@ func (o *sshConfigOptions) warnAboutOtherEntries(path string, entry sshconfig.En
 	others, _ := sshconfig.EntriesForContext(path, entry.Context, runtime.GOOS == goosWindows)
 	for _, other := range others {
 		if other.Damaged != nil || other.Cluster == entry.Cluster || routesAnother(other, entry.Context, entry.Kubeconfig) {
+			continue
+		}
+		// Under a KUBECONFIG list the new entry has no pin to compare, so an entry pinned
+		// to a file may well be another cluster's; its removal is not suggested.
+		if o.kubeconfigList && other.Kubeconfig != "" {
 			continue
 		}
 		hint := kubectlWorkspaceCommand("ssh-config", o.kubeconfig, entry.Context, other.Cluster, removeArgs...)
@@ -253,5 +259,6 @@ func (o *sshConfigOptions) kubeconfigForEntry() (string, error) {
 	if list {
 		warnf(o.streams.Err, "KUBECONFIG lists several files; the entry relies on ssh running with the same KUBECONFIG")
 	}
+	o.kubeconfigList = list
 	return path, err
 }

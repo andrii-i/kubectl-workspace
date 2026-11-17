@@ -722,3 +722,19 @@ func TestSSHConfigTreatsTwoSpellingsOfTheKubeconfigAsOnePin(t *testing.T) {
 		t.Errorf("rerun through the link: %q, stderr %q, %v; want the pinned entry found and replaced quietly", stdout, stderr, err)
 	}
 }
+
+// Under a KUBECONFIG list the entry carries no pin, so an entry pinned to one of the
+// files cannot be told from another cluster's; the warning does not offer to remove it.
+func TestSSHConfigKeepsPinnedEntriesOutOfTheHintUnderAKubeconfigList(t *testing.T) {
+	first, second := staticKubeconfig(t), staticKubeconfig(t)
+	t.Setenv("KUBECONFIG", first+string(os.PathListSeparator)+second)
+	file := filepath.Join(t.TempDir(), "config")
+	installEntry(t, file, sshconfig.Entry{Cluster: "pinned", Context: "dev", Kubeconfig: first})
+	installEntry(t, file, sshconfig.Entry{Cluster: "loose", Context: "dev"})
+
+	_, stderr, err := runWithStderr(t, "ssh-config", "--write", "--ssh-config-file", file, "--command", kwCommand,
+		"--cluster-name", "new")
+	if err != nil || strings.Contains(stderr, `"pinned"`) || !strings.Contains(stderr, `under the cluster name "loose"`) {
+		t.Errorf("stderr = %q, %v; want the unpinned entry named and the pinned one left alone", stderr, err)
+	}
+}
