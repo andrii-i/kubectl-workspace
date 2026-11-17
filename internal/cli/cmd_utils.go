@@ -53,7 +53,9 @@ func executablePath() (string, error) {
 // context and kubeconfig in the SSH configuration file, else the label clusterName
 // derives from the context name. A file that cannot be read, or a damaged entry routing
 // the context, is an error when strict and counts as no entry otherwise: printing needs
-// no file, and a write reports the damage after acting on the file.
+// no readable file, and a write reports the damage after acting on the file. Two
+// matching entries, or a name edited into a marker by hand, are errors on every path,
+// since the name derived instead could be another cluster's.
 func clusterForContext(flag, contextName, kubeconfig, sshConfigFile string, strict bool) (string, error) {
 	if flag != "" {
 		return clusterName(flag, contextName)
