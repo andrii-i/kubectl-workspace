@@ -94,7 +94,7 @@ func TestSSHConfigNamesTheClusterAfterTheEKSContext(t *testing.T) {
 	}
 }
 
-// Running ssh-config --write again replaces the entry, which holds when the label
+// Running ssh-config --write again replaces the entry, which holds when the cluster name
 // chosen the first time is found again without the flag.
 func TestSSHConfigReusesTheLabelOfTheInstalledEntry(t *testing.T) {
 	kubeconfig := staticKubeconfig(t)
@@ -147,7 +147,7 @@ func TestSSHConfigDerivesTheClusterNameFromTheContext(t *testing.T) {
 				}
 				return
 			}
-			// The context keeps its case in the ProxyCommand; only the alias label is lowercased.
+			// The context keeps its case in the ProxyCommand; only the cluster name in the alias is lowercased.
 			if err != nil || !strings.Contains(stdout, tt.wantHost) || !strings.Contains(stdout, "--context "+tt.context+" ") {
 				t.Errorf("stdout = %q, %v; want %q and the context as named", stdout, err, tt.wantHost)
 			}
@@ -226,7 +226,7 @@ func TestSSHConfigWarnsAboutNeitherItsOwnEntryNorAnotherKubeconfigs(t *testing.T
 	}
 }
 
-// Printing needs no file: an absent or unreadable one yields the default label, and
+// Printing needs no file: an absent or unreadable one yields the default cluster name, and
 // only --write, which has to read the file, reports it.
 func TestSSHConfigPrintsWithoutReadingTheFile(t *testing.T) {
 	kubeconfig := staticKubeconfig(t)
@@ -277,9 +277,7 @@ func TestSSHConfigRemoveReportsADamagedEntry(t *testing.T) {
 				t.Fatal(err)
 			}
 			damaged := tt.damage(string(content))
-			if err := os.WriteFile(file, []byte(damaged), 0o600); err != nil {
-				t.Fatal(err)
-			}
+			writeConfig(t, file, damaged)
 
 			_, err = run(t, "ssh-config", "--remove", "--ssh-config-file", file, "--kubeconfig", kubeconfig)
 			if err == nil || !strings.Contains(err.Error(), tt.wantErr) || !strings.Contains(err.Error(), "by hand") {
@@ -297,11 +295,7 @@ func TestSSHConfigRemoveReportsADamagedEntry(t *testing.T) {
 func TestSSHConfigRemoveDropsAHandEditedName(t *testing.T) {
 	kubeconfig := staticKubeconfig(t)
 	file := filepath.Join(t.TempDir(), "config")
-	edited := "# kubectl-workspace: start My Cluster\nHost *.my-cluster.jk8s\n  ProxyCommand kw connect --stdio --context dev %h\n" +
-		"# kubectl-workspace: end My Cluster\n"
-	if err := os.WriteFile(file, []byte(edited), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	writeConfig(t, file, renderedEntry("My Cluster", "dev"))
 
 	_, err := run(t, "ssh-config", "--remove", "--ssh-config-file", file, "--kubeconfig", kubeconfig)
 	if err == nil || !strings.Contains(err.Error(), "cannot be the cluster name in the alias") || !strings.Contains(err.Error(), "--cluster-name") {
@@ -325,9 +319,7 @@ func TestSSHConfigNamesDamageOnce(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(file, append(content, content...), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	writeConfig(t, file, string(content)+string(content))
 
 	_, stderr, err := runWithStderr(t, "ssh-config", "--write", "--ssh-config-file", file, "--kubeconfig", kubeconfig,
 		"--command", kwCommand, "--cluster-name", "other")
@@ -338,7 +330,7 @@ func TestSSHConfigNamesDamageOnce(t *testing.T) {
 
 // brokenEntry is what is left of an entry for cluster jd routing context dev after its
 // end marker was lost: OpenSSH still honours its Host line.
-const brokenEntry = "# kubectl-workspace: start jd\nHost *.jd.jk8s\n  ProxyCommand kw connect --stdio --context dev %h\n"
+var brokenEntry = strings.TrimSuffix(renderedEntry("jd", "dev"), "# kubectl-workspace: end jd\n")
 
 // --write under a free name and --remove of the intact entry, by context or by the name
 // the pasted hint carries, all succeed next to a damaged entry routing the same context,
@@ -357,9 +349,7 @@ func TestSSHConfigSaysWhenADamagedEntryRoutesTheContext(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			file := filepath.Join(t.TempDir(), "config")
-			if err := os.WriteFile(file, []byte(brokenEntry), 0o600); err != nil {
-				t.Fatal(err)
-			}
+			writeConfig(t, file, brokenEntry)
 			stdout, stderr, err := runWithStderr(t, "ssh-config", "--write", "--ssh-config-file", file, "--kubeconfig", kubeconfig,
 				"--command", kwCommand)
 			if err != nil || !strings.HasPrefix(stdout, "Installed the entry for Host *.dev.jk8s") {
@@ -472,9 +462,7 @@ func TestSSHConfigRemoveLeavesAnotherContextsEntryAlone(t *testing.T) {
 func TestSSHConfigRemovesTheEntry(t *testing.T) {
 	kubeconfig := staticKubeconfig(t)
 	file := filepath.Join(t.TempDir(), "config")
-	if err := os.WriteFile(file, []byte("Host github.com\n  User git\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	writeConfig(t, file, "Host github.com\n  User git\n")
 	if _, err := run(t, "ssh-config", "--write", "--ssh-config-file", file, "--kubeconfig", kubeconfig,
 		"--command", kwCommand); err != nil {
 		t.Fatal(err)
@@ -506,14 +494,20 @@ func TestSSHConfigRemovesTheEntry(t *testing.T) {
 	if want := "No entry for cluster \"dev\" in " + file + ".\n"; stdout != want {
 		t.Errorf("stdout = %q, want %q", stdout, want)
 	}
+}
 
-	_, err = run(t, "ssh-config", "--remove", "--write", "--ssh-config-file", file, "--kubeconfig", kubeconfig)
+func TestSSHConfigRefusesWriteWithRemove(t *testing.T) {
+	file := filepath.Join(t.TempDir(), "config")
+	_, err := run(t, "ssh-config", "--remove", "--write", "--ssh-config-file", file, "--kubeconfig", staticKubeconfig(t))
 	if err == nil || !strings.Contains(err.Error(), "none of the others can be") {
 		t.Errorf("error = %v, want --write and --remove refused together", err)
 	}
+}
 
-	// The context is often gone by the time its entry is removed.
-	_, err = run(t, "ssh-config", "--remove", "--ssh-config-file", file, "--kubeconfig", kubeconfig, "--context", "gone")
+// The context is often gone by the time its entry is removed; the flag is the way around it.
+func TestSSHConfigRemoveNamesTheFlagWhenTheContextIsGone(t *testing.T) {
+	file := filepath.Join(t.TempDir(), "config")
+	_, err := run(t, "ssh-config", "--remove", "--ssh-config-file", file, "--kubeconfig", staticKubeconfig(t), "--context", "gone")
 	if err == nil || !strings.Contains(err.Error(), "pass --cluster-name to remove the entry without reading the kubeconfig") {
 		t.Errorf("error = %v, want the flag named as the way around a missing context", err)
 	}

@@ -134,6 +134,21 @@ func installEntry(t *testing.T, configFile string, entry sshconfig.Entry) {
 	}
 }
 
+// renderedEntry returns the entry as ssh-config --write writes it, for a fixture Install
+// would refuse: a name that is no label, or a block about to be damaged.
+func renderedEntry(cluster, contextName string) string {
+	return sshconfig.Entry{Cluster: cluster, Context: contextName, Command: kwCommand, User: "jovyan",
+		Windows: runtime.GOOS == goosWindows}.Render()
+}
+
+// writeConfig writes an SSH configuration file with the given content.
+func writeConfig(t *testing.T, path, content string) {
+	t.Helper()
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // recordLaunches replaces the editor launcher for the test and returns the links it received.
 func recordLaunches(t *testing.T) *[]string {
 	t.Helper()
@@ -205,7 +220,7 @@ func TestOpenDoesNotLaunchWhenTheOperatorRefuses(t *testing.T) {
 	}
 }
 
-// The entry carries the context, so open finds the cluster label a user chose for an
+// The entry carries the context, so open finds the cluster name a user chose for an
 // EKS context without being told again.
 func TestOpenReadsTheClusterNameFromTheInstalledEntry(t *testing.T) {
 	kubeconfig := staticKubeconfig(t)
@@ -237,14 +252,10 @@ func TestOpenReadsTheClusterNameFromTheInstalledEntry(t *testing.T) {
 }
 
 // A marker edited by hand can name a cluster the alias cannot carry; the lookup
-// says so and names the flag, as every other failure to pick a label does.
+// says so and names the flag, as every other failure to pick a cluster name does.
 func TestOpenRefusesAnEditedEntryWhoseNameIsNoLabel(t *testing.T) {
 	configFile := filepath.Join(t.TempDir(), "config")
-	block := "# kubectl-workspace: start My Cluster\nHost *.My Cluster.jk8s\n  ProxyCommand " + kwCommand +
-		" connect --stdio --context dev %h\n# kubectl-workspace: end My Cluster\n"
-	if err := os.WriteFile(configFile, []byte(block), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	writeConfig(t, configFile, renderedEntry("My Cluster", "dev"))
 	_, err := run(t, "open", "--kubeconfig", staticKubeconfig(t), "--ssh-config-file", configFile, "--print-only", "ws1")
 	if err == nil || !strings.Contains(err.Error(), "cannot be the cluster name in the alias") || !strings.Contains(err.Error(), "--cluster-name") {
 		t.Errorf("error = %v, want the edited name refused with the flag named", err)
@@ -318,9 +329,7 @@ func TestOpenRefusesAnEntryRoutingAnotherCluster(t *testing.T) {
 func TestOpenStopsOnADamagedEntryForTheContext(t *testing.T) {
 	kubeconfig := staticKubeconfig(t)
 	configFile := filepath.Join(t.TempDir(), "config")
-	if err := os.WriteFile(configFile, []byte(brokenEntry), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	writeConfig(t, configFile, brokenEntry)
 	_, err := run(t, "open", "--kubeconfig", kubeconfig, "--ssh-config-file", configFile, "ws1")
 	if err == nil || !strings.Contains(err.Error(), `the entry for cluster "jd" has no end marker`) {
 		t.Errorf("error = %v, want the damaged entry named", err)
