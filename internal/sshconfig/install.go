@@ -162,7 +162,8 @@ func prevMarker(lines []string, from int) int {
 	return -1
 }
 
-// readEntry reads the connect flags out of an entry's ProxyCommand line.
+// readEntry reads the connect flags out of an entry's ProxyCommand line. OpenSSH keeps
+// the first value it meets for an option, so the first ProxyCommand line is the entry's.
 func readEntry(cluster string, block []string, windows bool) InstalledEntry {
 	entry := InstalledEntry{Cluster: cluster}
 	for _, line := range block {
@@ -179,6 +180,7 @@ func readEntry(cluster string, block []string, windows bool) InstalledEntry {
 				entry.Kubeconfig = args[i+1]
 			}
 		}
+		break
 	}
 	return entry
 }
@@ -345,8 +347,9 @@ func splitLines(s string) []string {
 }
 
 // findEntry returns the line range of the entry for cluster, or -1 when absent. A
-// start marker without its end, an end marker without its start, or a second marker
-// of either kind is an error: the file needs a hand before the tool touches it.
+// start marker without its end, an end marker without its start, a second marker of
+// either kind, or another entry's marker inside the block is an error: the file needs a
+// hand before the tool touches it.
 func findEntry(lines []string, cluster string) (start, end int, err error) {
 	start, end = -1, -1
 	for i, line := range lines {
@@ -364,6 +367,11 @@ func findEntry(lines []string, cluster string) (start, end int, err error) {
 				return -1, -1, fmt.Errorf("two end markers for cluster %q; remove the entries by hand", cluster)
 			}
 			end = i
+		default:
+			if start >= 0 && end < 0 && isMarker(line) {
+				return -1, -1, fmt.Errorf("the entry for cluster %q holds another entry's markers; repair the file by hand",
+					cluster)
+			}
 		}
 	}
 	if start >= 0 && end < 0 {

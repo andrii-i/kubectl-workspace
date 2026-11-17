@@ -260,13 +260,20 @@ func TestEntryForRejectsAPartialEntry(t *testing.T) {
 func TestDuplicatedMarkersAreDamage(t *testing.T) {
 	rendered := testEntry().Render()
 	lines := strings.Split(strings.TrimSuffix(rendered, "\n"), "\n")
-	lines[0], lines[len(lines)-1] = lines[len(lines)-1], lines[0]
+	swapped := append([]string{}, lines...)
+	swapped[0], swapped[len(swapped)-1] = swapped[len(swapped)-1], swapped[0]
+	other := testEntry()
+	other.Cluster, other.Context = "other", "staging"
+	otherLines := strings.Split(strings.TrimSuffix(other.Render(), "\n"), "\n")
+	nested := append(append(append([]string{}, lines[:len(lines)-1]...), otherLines[:len(otherLines)-1]...),
+		lines[len(lines)-1], otherLines[len(otherLines)-1])
 	tests := map[string]string{
 		"the block twice":            rendered + rendered,
 		"a stray start marker after": rendered + startMarker("prod") + "\n",
 		"a stray end marker after":   rendered + endMarker("prod") + "\n",
 		"the start marker lost":      strings.TrimPrefix(rendered, startMarker("prod")+"\n"),
-		"the markers swapped":        strings.Join(lines, "\n") + "\n",
+		"the markers swapped":        strings.Join(swapped, "\n") + "\n",
+		"two blocks nested":          strings.Join(nested, "\n") + "\n",
 	}
 	for name, content := range tests {
 		t.Run(name, func(t *testing.T) {
