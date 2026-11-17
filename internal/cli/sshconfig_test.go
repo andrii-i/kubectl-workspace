@@ -715,18 +715,47 @@ func TestSSHConfigTreatsTwoSpellingsOfTheKubeconfigAsOnePin(t *testing.T) {
 	}
 }
 
-// Under a KUBECONFIG list the entry carries no pin, so an entry pinned to one of the
-// files cannot be told from another cluster's; the warning does not offer to remove it.
-func TestSSHConfigKeepsPinnedEntriesOutOfTheHintUnderAKubeconfigList(t *testing.T) {
-	first, second := staticKubeconfig(t), staticKubeconfig(t)
-	t.Setenv("KUBECONFIG", first+string(os.PathListSeparator)+second)
-	file := filepath.Join(t.TempDir(), "config")
-	installEntry(t, file, sshconfig.Entry{Cluster: "pinned", Context: "dev", Kubeconfig: first})
-	installEntry(t, file, sshconfig.Entry{Cluster: "loose", Context: "dev"})
+// useAsDefaultKubeconfig installs the kubeconfig as ~/.kube/config in the test package's
+// own home directory, for a command run without --kubeconfig and KUBECONFIG.
+func useAsDefaultKubeconfig(t *testing.T, kubeconfig string) {
+	t.Helper()
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defaultKubeconfig := filepath.Join(home, ".kube", "config")
+	if err := os.MkdirAll(filepath.Dir(defaultKubeconfig), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	content, err := os.ReadFile(kubeconfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(defaultKubeconfig, content, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(filepath.Dir(defaultKubeconfig)) })
+}
 
-	_, stderr, err := runWithStderr(t, "ssh-config", "--write", "--ssh-config-file", file, "--command", kwCommand,
-		"--cluster-name", "new")
-	if err != nil || strings.Contains(stderr, `"pinned"`) || !strings.Contains(stderr, `under the cluster name "loose"`) {
-		t.Errorf("stderr = %q, %v; want the unpinned entry named and the pinned one left alone", stderr, err)
+// A write without a pin, from a KUBECONFIG list or the default lookup, cannot tell an
+// entry pinned to a file from another cluster's; the warning does not offer to remove it.
+func TestSSHConfigKeepsPinnedEntriesOutOfTheHintWithoutAPin(t *testing.T) {
+	first, second := staticKubeconfig(t), staticKubeconfig(t)
+	for name, unpin := range map[string]func(t *testing.T){
+		"a KUBECONFIG list":  func(t *testing.T) { t.Setenv("KUBECONFIG", first+string(os.PathListSeparator)+second) },
+		"the default lookup": func(t *testing.T) { useAsDefaultKubeconfig(t, second) },
+	} {
+		t.Run(name, func(t *testing.T) {
+			unpin(t)
+			file := filepath.Join(t.TempDir(), "config")
+			installEntry(t, file, sshconfig.Entry{Cluster: "pinned", Context: "dev", Kubeconfig: first})
+			installEntry(t, file, sshconfig.Entry{Cluster: "loose", Context: "dev"})
+
+			_, stderr, err := runWithStderr(t, "ssh-config", "--write", "--ssh-config-file", file, "--command", kwCommand,
+				"--cluster-name", "new")
+			if err != nil || strings.Contains(stderr, `"pinned"`) || !strings.Contains(stderr, `under the cluster name "loose"`) {
+				t.Errorf("stderr = %q, %v; want the unpinned entry named and the pinned one left alone", stderr, err)
+			}
+		})
 	}
 }
