@@ -51,16 +51,20 @@ func executablePath() (string, error) {
 // clusterForContext resolves the cluster name in the alias for a context: the
 // --cluster-name flag when given, else the name of the entry already installed for the
 // context and kubeconfig in the SSH configuration file, else the label clusterName
-// derives from the context name. A file that cannot be read, or a damaged entry, counts
-// as holding no entry here; the commands that act on the file report it.
-func clusterForContext(flag, contextName, kubeconfig, sshConfigFile string) (string, error) {
+// derives from the context name. A file that cannot be read, or a damaged entry routing
+// the context, is an error when strict and counts as no entry otherwise: printing needs
+// no file, and a write reports the damage after acting on the file.
+func clusterForContext(flag, contextName, kubeconfig, sshConfigFile string, strict bool) (string, error) {
 	if flag != "" {
 		return clusterName(flag, contextName)
 	}
 	var clusters []string
 	path, err := sshConfigPath(sshConfigFile)
 	if err == nil {
-		clusters, _ = installedClusters(contextName, kubeconfig, path)
+		clusters, err = installedClusters(contextName, kubeconfig, path)
+	}
+	if err != nil && strict {
+		return "", err
 	}
 	cluster, err := pickInstalledCluster(clusters, path, contextName)
 	if err != nil || cluster != "" {

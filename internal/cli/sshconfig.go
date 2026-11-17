@@ -209,7 +209,7 @@ func (o *sshConfigOptions) entry() (sshconfig.Entry, error) {
 	if err != nil {
 		return sshconfig.Entry{}, err
 	}
-	cluster, err := clusterForContext(o.clusterName, target.Context, kubeconfig, o.sshConfigFile)
+	cluster, err := clusterForContext(o.clusterName, target.Context, kubeconfig, o.sshConfigFile, false)
 	if err != nil {
 		return sshconfig.Entry{}, err
 	}
