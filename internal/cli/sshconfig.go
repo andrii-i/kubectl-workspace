@@ -100,16 +100,13 @@ func (o *sshConfigOptions) run() error {
 
 // warnAboutOtherEntries names every other intact entry that routes the same cluster as
 // the one just installed, with the command that removes it, since the alias under the
-// old name still works, and every damaged entry routing the context, which needs a hand.
+// old name still works; damaged entries routing the context get warnAboutDamage.
 func (o *sshConfigOptions) warnAboutOtherEntries(path string, entry sshconfig.Entry) {
+	warnAboutDamage(o.streams.Err, path, entry.Context)
 	removeArgs := sshConfigHintArgs(removeFlag, o.sshConfigFile)
 	others, _ := sshconfig.EntriesForContext(path, entry.Context, runtime.GOOS == goosWindows)
 	for _, other := range others {
-		if other.Damaged != nil {
-			warnf(o.streams.Err, "%s: %v", path, other.Damaged)
-			continue
-		}
-		if other.Cluster == entry.Cluster || routesAnother(other, entry.Context, entry.Kubeconfig) {
+		if other.Damaged != nil || other.Cluster == entry.Cluster || routesAnother(other, entry.Context, entry.Kubeconfig) {
 			continue
 		}
 		hint := kubectlWorkspaceCommand("ssh-config", o.kubeconfig, entry.Context, other.Cluster, removeArgs...)
@@ -146,7 +143,7 @@ func (o *sshConfigOptions) removeEntry() error {
 	if err != nil {
 		return err
 	}
-	cluster, err := o.clusterToRemove(path)
+	cluster, contextName, err := o.clusterToRemove(path)
 	if err != nil || cluster == "" {
 		return err
 	}
@@ -160,39 +157,42 @@ func (o *sshConfigOptions) removeEntry() error {
 	}
 	host := sshconfig.Entry{Cluster: cluster}.HostPattern()
 	_, _ = fmt.Fprintf(o.streams.Out, "Removed the entry for Host %s from %s.\n", host, path)
+	if contextName != "" {
+		warnAboutDamage(o.streams.Err, path, contextName)
+	}
 	return nil
 }
 
 // clusterToRemove resolves the entry --remove acts on: --cluster-name, validated, else
-// the entry installed for the context. With the flag the kubeconfig is not read, so an
-// entry whose context is gone can still be removed. The derived default never counts:
-// it could name another context's entry. Empty, after a note, when nothing routes the
-// context; an unreadable file or a damaged entry routing the context is an error.
-func (o *sshConfigOptions) clusterToRemove(path string) (string, error) {
+// the entry installed for the context, which it returns as well. With the flag the
+// kubeconfig is not read, so an entry whose context is gone can still be removed. The
+// derived default never counts: it could name another context's entry. The cluster is
+// empty, after a note, when nothing routes the context; an unreadable file or a damaged
+// entry routing the context is an error.
+func (o *sshConfigOptions) clusterToRemove(path string) (cluster, contextName string, err error) {
 	if o.clusterName != "" {
-		return o.clusterName, sshconfig.ValidateClusterName(o.clusterName)
+		return o.clusterName, "", sshconfig.ValidateClusterName(o.clusterName)
 	}
 	target, err := o.target()
 	if err != nil {
-		return "", fmt.Errorf("%w; pass --cluster-name to remove the entry without reading the kubeconfig", err)
+		return "", "", fmt.Errorf("%w; pass --cluster-name to remove the entry without reading the kubeconfig", err)
 	}
 	kubeconfig, _, err := pinnedKubeconfig(o.kubeconfig)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
-	clusters, _, err := installedClusters(target.Context, kubeconfig, o.sshConfigFile)
+	clusters, err := installedClusters(target.Context, kubeconfig, path)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
-	cluster, err := pickInstalledCluster(clusters, path, target.Context)
-	if err != nil {
-		return "", err
+	if cluster, err = pickInstalledCluster(clusters, path, target.Context); err != nil {
+		return "", "", err
 	}
 	if cluster == "" {
 		_, _ = fmt.Fprintf(o.streams.Out, "No entry in %s routes context %q; pass --cluster-name for an entry "+
 			"under another name.\n", path, target.Context)
 	}
-	return cluster, nil
+	return cluster, target.Context, nil
 }
 
 // entry builds and validates the entry from the flags and the kubeconfig context.

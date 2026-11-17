@@ -292,24 +292,37 @@ func TestSSHConfigRemoveReportsADamagedEntry(t *testing.T) {
 	}
 }
 
-// --write under a free name succeeds next to a damaged entry routing the same context,
-// and says so, since OpenSSH still honours what is left of that entry.
-func TestSSHConfigWriteWarnsAboutADamagedEntry(t *testing.T) {
+// brokenEntry is what is left of an entry for cluster jd routing context dev after its
+// end marker was lost: OpenSSH still honours its Host line.
+const brokenEntry = "# kubectl-workspace: start jd\nHost *.jd.jk8s\n  ProxyCommand kw connect --stdio --context dev %h\n"
+
+// --write under a free name and --remove of the intact entry both succeed next to a
+// damaged entry routing the same context, and both say it is still there.
+func TestSSHConfigSaysWhenADamagedEntryRoutesTheContext(t *testing.T) {
 	kubeconfig := staticKubeconfig(t)
 	file := filepath.Join(t.TempDir(), "config")
-	broken := "# kubectl-workspace: start jd\nHost *.jd.jk8s\n  ProxyCommand " + kwCommand + " connect --stdio --context dev %h\n"
-	if err := os.WriteFile(file, []byte(broken), 0o600); err != nil {
+	if err := os.WriteFile(file, []byte(brokenEntry), 0o600); err != nil {
 		t.Fatal(err)
+	}
+	wantDamage := func(t *testing.T, action, stderr string) {
+		t.Helper()
+		if !strings.Contains(stderr, `the entry for cluster "jd" has no end marker`) || !strings.Contains(stderr, "by hand") {
+			t.Errorf("%s: stderr = %q; want the damaged jd entry named with a request to repair it by hand", action, stderr)
+		}
 	}
 
 	stdout, stderr, err := runWithStderr(t, "ssh-config", "--write", "--ssh-config-file", file, "--kubeconfig", kubeconfig,
 		"--command", kwCommand)
 	if err != nil || !strings.HasPrefix(stdout, "Installed the entry for Host *.dev.jk8s") {
-		t.Fatalf("stdout = %q, %v; want the dev entry installed", stdout, err)
+		t.Fatalf("--write: stdout = %q, %v; want the dev entry installed", stdout, err)
 	}
-	if !strings.Contains(stderr, `the entry for cluster "jd" has no end marker`) || !strings.Contains(stderr, "by hand") {
-		t.Errorf("stderr = %q; want the damaged jd entry named with a request to repair it by hand", stderr)
+	wantDamage(t, "--write", stderr)
+
+	stdout, stderr, err = runWithStderr(t, "ssh-config", "--remove", "--ssh-config-file", file, "--kubeconfig", kubeconfig)
+	if err != nil || !strings.HasPrefix(stdout, "Removed the entry for Host *.dev.jk8s") {
+		t.Fatalf("--remove: stdout = %q, %v; want the dev entry removed", stdout, err)
 	}
+	wantDamage(t, "--remove", stderr)
 }
 
 // Replacing an entry can change what its alias reaches: the context, or the kubeconfig

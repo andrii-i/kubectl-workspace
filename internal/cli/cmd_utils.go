@@ -7,6 +7,7 @@ package cli
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -51,12 +52,16 @@ func executablePath() (string, error) {
 // --cluster-name flag when given, else the name of the entry already installed for the
 // context and kubeconfig in the SSH configuration file, else the label clusterName
 // derives from the context name. A file that cannot be read, or a damaged entry, counts
-// as holding no entry here; --write and --remove, which act on the file, report it.
+// as holding no entry here; the commands that act on the file report it.
 func clusterForContext(flag, contextName, kubeconfig, sshConfigFile string) (string, error) {
 	if flag != "" {
 		return clusterName(flag, contextName)
 	}
-	clusters, path, _ := installedClusters(contextName, kubeconfig, sshConfigFile)
+	var clusters []string
+	path, err := sshConfigPath(sshConfigFile)
+	if err == nil {
+		clusters, _ = installedClusters(contextName, kubeconfig, path)
+	}
 	cluster, err := pickInstalledCluster(clusters, path, contextName)
 	if err != nil || cluster != "" {
 		return cluster, err
@@ -83,19 +88,15 @@ func pickInstalledCluster(clusters []string, path, contextName string) (string, 
 }
 
 // installedClusters lists the cluster names of the intact entries installed for the
-// context, sorted, and the file they were read from. An entry pinned to another
-// kubeconfig file routes another cluster of the same context name and does not count;
-// entries with the same pin, or none on either side, win over entries pinned on one
-// side only. The error reports a file that cannot be read, or a damaged entry routing
-// the context when no intact one does.
-func installedClusters(contextName, kubeconfig, sshConfigFile string) (clusters []string, path string, err error) {
-	path, err = sshConfigPath(sshConfigFile)
-	if err != nil {
-		return nil, "", err
-	}
+// context in the file at path, sorted. An entry pinned to another kubeconfig file routes
+// another cluster of the same context name and does not count; entries with the same
+// pin, or none on either side, win over entries pinned on one side only. The error
+// reports a file that cannot be read, or a damaged entry routing the context when no
+// intact one does.
+func installedClusters(contextName, kubeconfig, path string) ([]string, error) {
 	entries, err := sshconfig.EntriesForContext(path, contextName, runtime.GOOS == goosWindows)
 	if err != nil {
-		return nil, path, err
+		return nil, err
 	}
 	var same, oneSided []string
 	var damaged error
@@ -111,15 +112,26 @@ func installedClusters(contextName, kubeconfig, sshConfigFile string) (clusters 
 			oneSided = append(oneSided, e.Cluster)
 		}
 	}
-	clusters = oneSided
+	clusters := oneSided
 	if len(same) > 0 {
 		clusters = same
 	}
 	if len(clusters) == 0 {
-		return nil, path, damaged
+		return nil, damaged
 	}
 	sort.Strings(clusters)
-	return clusters, path, nil
+	return clusters, nil
+}
+
+// warnAboutDamage names every damaged entry routing the context: OpenSSH still honours
+// the Host line of a block whose markers are broken, and only a hand can repair it.
+func warnAboutDamage(w io.Writer, path, contextName string) {
+	entries, _ := sshconfig.EntriesForContext(path, contextName, runtime.GOOS == goosWindows)
+	for _, e := range entries {
+		if e.Damaged != nil {
+			warnf(w, "%s: %v", path, e.Damaged)
+		}
+	}
 }
 
 // routesAnother reports whether an installed entry routes another cluster than the

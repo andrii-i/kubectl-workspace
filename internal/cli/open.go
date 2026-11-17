@@ -87,6 +87,16 @@ func (o *openOptions) run(ctx context.Context, workspace string) error {
 	if err != nil {
 		return err
 	}
+	if !o.printOnly {
+		// The editor is about to connect through the file, so a damaged entry for the
+		// context or a file that cannot be read stops here, named, instead of the hint to
+		// write a second entry under the derived name.
+		if path, err := sshConfigPath(o.sshConfigFile); err == nil {
+			if _, err := installedClusters(target.Context, kubeconfig, path); err != nil {
+				return err
+			}
+		}
+	}
 	cluster, err := clusterForContext(o.clusterName, target.Context, kubeconfig, o.sshConfigFile)
 	if err != nil {
 		return err

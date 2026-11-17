@@ -312,3 +312,21 @@ func TestOpenRefusesAnEntryRoutingAnotherCluster(t *testing.T) {
 		})
 	}
 }
+
+// A damaged entry routing the context stops open before it derives a name and sends the
+// user to write a second entry; printing the link and command still works.
+func TestOpenStopsOnADamagedEntryForTheContext(t *testing.T) {
+	kubeconfig := staticKubeconfig(t)
+	configFile := filepath.Join(t.TempDir(), "config")
+	if err := os.WriteFile(configFile, []byte(brokenEntry), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err := run(t, "open", "--kubeconfig", kubeconfig, "--ssh-config-file", configFile, "ws1")
+	if err == nil || !strings.Contains(err.Error(), `the entry for cluster "jd" has no end marker`) {
+		t.Errorf("error = %v, want the damaged entry named", err)
+	}
+	stdout, err := run(t, "open", "--kubeconfig", kubeconfig, "--ssh-config-file", configFile, "--print-only", "ws1")
+	if err != nil || !strings.Contains(stdout, "ssh ws1.team-a.dev.jk8s\n") {
+		t.Errorf("--print-only: stdout = %q, %v; want the derived alias printed", stdout, err)
+	}
+}
