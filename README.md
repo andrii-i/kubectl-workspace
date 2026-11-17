@@ -106,7 +106,7 @@ Global flags, on every command:
 | Flag | Default | Purpose |
 |------|---------|---------|
 | `--write` | off | Install the entry into the SSH configuration file; without it the entry is printed |
-| `--remove` | off | Remove the cluster's entry from the SSH configuration file |
+| `--remove` | off | Remove the entry installed for the context, or the one `--cluster-name` names |
 | `--cluster-name` | from the installed entry, else the context name or the cluster name in an EKS ARN | The `<cluster>` label of the aliases |
 | `--ssh-config-file` | `~/.ssh/config` | The SSH configuration file |
 | `--command` | this binary | Path or name of `kubectl-workspace` for the ProxyCommand |

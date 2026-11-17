@@ -39,7 +39,7 @@ func newSSHConfigCommand(root *rootOptions) *cobra.Command {
 of one cluster, ` + sshconfig.AliasFormat + `, through
 "kubectl workspace connect". Without --write it prints the entry; with --write it
 installs it in ~/.ssh/config, replacing an earlier entry for the same cluster; with
---remove it deletes the cluster's entry.
+--remove it deletes the entry installed for the context, or the one --cluster-name names.
 
 The cluster name comes from the entry already installed for the context, else from
 the context name or the cluster name inside a context named like an EKS cluster ARN;
@@ -50,7 +50,8 @@ the context name or the cluster name inside a context named like an EKS cluster 
 		},
 	}
 	cmd.Flags().BoolVar(&o.write, writeFlag, false, "install the entry into the SSH configuration file")
-	cmd.Flags().BoolVar(&o.remove, removeFlag, false, "remove the cluster's entry from the SSH configuration file")
+	cmd.Flags().BoolVar(&o.remove, removeFlag, false,
+		"remove the entry installed for the context, or the one --cluster-name names, from the SSH configuration file")
 	cmd.MarkFlagsMutuallyExclusive(writeFlag, removeFlag)
 	cmd.Flags().StringVar(&o.clusterName, "cluster-name", "", clusterNameHelp)
 	cmd.Flags().StringVar(&o.sshConfigFile, "ssh-config-file", "", sshConfigFileHelp)
