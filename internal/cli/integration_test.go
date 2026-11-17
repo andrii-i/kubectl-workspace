@@ -8,6 +8,7 @@ package cli
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
@@ -38,7 +39,26 @@ func TestMain(m *testing.M) {
 	case "fail":
 		os.Exit(3)
 	}
-	os.Exit(m.Run())
+	os.Exit(runWithOwnHome(m))
+}
+
+// runWithOwnHome runs the tests with the home directory pointed at an empty temporary
+// directory: the commands default to ~/.ssh/config, so without it a developer's own
+// entries would leak into the tests.
+func runWithOwnHome(m *testing.M) int {
+	home, err := os.MkdirTemp("", "kubectl-workspace-home")
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	defer func() { _ = os.RemoveAll(home) }()
+	for _, name := range []string{"HOME", "USERPROFILE"} {
+		if err := os.Setenv(name, home); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 1
+		}
+	}
+	return m.Run()
 }
 
 // pluginProcess is the plugin running as a ProxyCommand: writes go to its stdin,
