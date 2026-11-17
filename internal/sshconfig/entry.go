@@ -113,11 +113,14 @@ func (e Entry) Render() string {
 	return b.String()
 }
 
-const startMarkerPrefix = "# kubectl-workspace: start "
+const (
+	startMarkerPrefix = "# kubectl-workspace: start "
+	endMarkerPrefix   = "# kubectl-workspace: end "
+)
 
 func startMarker(cluster string) string { return startMarkerPrefix + cluster }
 
-func endMarker(cluster string) string { return "# kubectl-workspace: end " + cluster }
+func endMarker(cluster string) string { return endMarkerPrefix + cluster }
 
 // plainArg matches arguments the shell passes through unchanged.
 var plainArg = regexp.MustCompile(`^[A-Za-z0-9_./:@%+=,-]+$`)

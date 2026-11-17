@@ -50,25 +50,24 @@ func executablePath() (string, error) {
 // clusterForContext resolves the cluster name in the alias for a context: the
 // --cluster-name flag when given, else the name of the entry already installed for the
 // context and kubeconfig in the SSH configuration file, else the label clusterName
-// derives from the context name.
+// derives from the context name. A file that cannot be read, or a damaged entry, counts
+// as holding no entry here; the command that needs the file reports it.
 func clusterForContext(flag, contextName, kubeconfig, sshConfigFile string) (string, error) {
 	if flag != "" {
 		return clusterName(flag, contextName)
 	}
-	cluster, err := installedCluster(contextName, kubeconfig, sshConfigFile)
+	clusters, path, _ := installedClusters(contextName, kubeconfig, sshConfigFile)
+	cluster, err := pickInstalledCluster(clusters, path, contextName)
 	if err != nil || cluster != "" {
 		return cluster, err
 	}
 	return clusterName("", contextName)
 }
 
-// installedCluster returns the cluster name of the entry installed for the context and
-// kubeconfig, empty when there is none. Two entries that match need --cluster-name to
-// tell them apart, and a name edited into a marker by hand has to be a label. A file
-// that cannot be read counts as holding no entry; the command that needs the file
-// reports it.
-func installedCluster(contextName, kubeconfig, sshConfigFile string) (string, error) {
-	clusters, path := installedClusters(contextName, kubeconfig, sshConfigFile)
+// pickInstalledCluster returns the one cluster name among the entries installed for the
+// context, empty when there is none. Two entries need --cluster-name to tell them
+// apart, and a name edited into a marker by hand has to be a label.
+func pickInstalledCluster(clusters []string, path, contextName string) (string, error) {
 	switch len(clusters) {
 	case 0:
 		return "", nil
@@ -83,23 +82,29 @@ func installedCluster(contextName, kubeconfig, sshConfigFile string) (string, er
 		path, contextName, strings.Join(clusters, ", "))
 }
 
-// installedClusters lists the cluster names of the entries installed for the context,
-// sorted, and the file they were read from; none when the file cannot be read. An
-// entry pinned to another kubeconfig file routes another cluster of the same context
-// name and does not count; entries with the same pin, or none on either side, win
-// over entries pinned on one side only.
-func installedClusters(contextName, kubeconfig, sshConfigFile string) (clusters []string, path string) {
-	path, err := sshConfigPath(sshConfigFile)
+// installedClusters lists the cluster names of the intact entries installed for the
+// context, sorted, and the file they were read from. An entry pinned to another
+// kubeconfig file routes another cluster of the same context name and does not count;
+// entries with the same pin, or none on either side, win over entries pinned on one
+// side only. The error reports a file that cannot be read, or a damaged entry routing
+// the context when no intact one does.
+func installedClusters(contextName, kubeconfig, sshConfigFile string) (clusters []string, path string, err error) {
+	path, err = sshConfigPath(sshConfigFile)
 	if err != nil {
-		return nil, ""
+		return nil, "", err
 	}
 	entries, err := sshconfig.EntriesForContext(path, contextName, runtime.GOOS == goosWindows)
 	if err != nil {
-		return nil, path
+		return nil, path, err
 	}
 	var same, oneSided []string
+	var damaged error
 	for _, e := range entries {
 		switch {
+		case e.Damaged != nil:
+			if damaged == nil {
+				damaged = fmt.Errorf("%s: %w", path, e.Damaged)
+			}
 		case e.Kubeconfig == kubeconfig:
 			same = append(same, e.Cluster)
 		case e.Kubeconfig == "" || kubeconfig == "":
@@ -110,8 +115,11 @@ func installedClusters(contextName, kubeconfig, sshConfigFile string) (clusters 
 	if len(same) > 0 {
 		clusters = same
 	}
+	if len(clusters) == 0 {
+		return nil, path, damaged
+	}
 	sort.Strings(clusters)
-	return clusters, path
+	return clusters, path, nil
 }
 
 // routesAnother reports whether an installed entry routes another cluster than the

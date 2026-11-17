@@ -231,9 +231,79 @@ func TestSSHConfigPrintsWithoutReadingTheFile(t *testing.T) {
 	if err != nil || !strings.Contains(stdout, "Host *.dev.jk8s\n") {
 		t.Errorf("print mode with a dangling link: %q, %v; want the entry printed", stdout, err)
 	}
-	_, err = run(t, "ssh-config", "--write", "--ssh-config-file", link, "--kubeconfig", kubeconfig, "--command", kwCommand)
-	if err == nil || !strings.Contains(err.Error(), "link to a missing file") {
-		t.Errorf("--write through the dangling link: error = %v, want the link named", err)
+	for _, action := range []string{"--write", "--remove"} {
+		_, err = run(t, "ssh-config", action, "--ssh-config-file", link, "--kubeconfig", kubeconfig, "--command", kwCommand)
+		if err == nil || !strings.Contains(err.Error(), "link to a missing file") {
+			t.Errorf("%s through the dangling link: error = %v, want the link named", action, err)
+		}
+	}
+}
+
+// A stray marker makes the entry damage that --remove reports instead of claiming that
+// nothing routes the context; the file is left for a hand to repair.
+func TestSSHConfigRemoveReportsADamagedEntry(t *testing.T) {
+	kubeconfig := staticKubeconfig(t)
+	file := filepath.Join(t.TempDir(), "config")
+	installEntry(t, file, sshconfig.Entry{Cluster: "dev", Context: "dev", Kubeconfig: kubeconfig})
+	content, err := os.ReadFile(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	content = append(content, "# kubectl-workspace: start dev\n"...)
+	if err := os.WriteFile(file, content, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = run(t, "ssh-config", "--remove", "--ssh-config-file", file, "--kubeconfig", kubeconfig)
+	if err == nil || !strings.Contains(err.Error(), "two start markers") || !strings.Contains(err.Error(), "remove the entries by hand") {
+		t.Errorf("error = %v, want the damage named and a request to repair the file by hand", err)
+	}
+	if after, err := os.ReadFile(file); err != nil || string(after) != string(content) {
+		t.Errorf("file after the refused --remove:\n%s\n%v; want it untouched", after, err)
+	}
+}
+
+// Replacing an entry can change what its alias reaches: the context, or the kubeconfig
+// file ssh resolves it in when the pin is added or dropped. The rerun says so.
+func TestSSHConfigWarnsWhenTheReplacementChangesTheRoute(t *testing.T) {
+	kubeconfig := staticKubeconfig(t)
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The default kubeconfig lives in the test package's own home directory.
+	defaultKubeconfig := filepath.Join(home, ".kube", "config")
+	if err := os.MkdirAll(filepath.Dir(defaultKubeconfig), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	content, err := os.ReadFile(kubeconfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(defaultKubeconfig, content, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(filepath.Dir(defaultKubeconfig)) })
+	file := filepath.Join(t.TempDir(), "config")
+	write := func(extra ...string) (string, error) {
+		_, stderr, err := runWithStderr(t, append([]string{"ssh-config", "--write", "--ssh-config-file", file,
+			"--command", kwCommand}, extra...)...)
+		return stderr, err
+	}
+
+	if stderr, err := write(); err != nil || stderr != "" {
+		t.Fatalf("first write: stderr = %q, %v; want a quiet install", stderr, err)
+	}
+	stderr, err := write("--kubeconfig", kubeconfig)
+	if want := `routed context "dev" and now routes context "dev" of kubeconfig ` + kubeconfig; err != nil || !strings.Contains(stderr, want) {
+		t.Errorf("pinning rerun: stderr = %q, %v; want %q", stderr, err, want)
+	}
+	stderr, err = write()
+	if want := `routed context "dev" of kubeconfig ` + kubeconfig + ` and now routes context "dev"`; err != nil || !strings.Contains(stderr, want) {
+		t.Errorf("unpinning rerun: stderr = %q, %v; want %q", stderr, err, want)
+	}
+	if stderr, err := write(); err != nil || stderr != "" {
+		t.Errorf("same rerun: stderr = %q, %v; want no warning", stderr, err)
 	}
 }
 
@@ -264,10 +334,14 @@ func TestSSHConfigRefusesToTakeOverAnotherContextsEntry(t *testing.T) {
 		t.Errorf("file after the refused --write:\n%s\n%v; want it untouched", after, err)
 	}
 
-	// With the name given, the replacement is deliberate; another name adds an entry.
-	stdout, err := write("--context", testutil.ARNContext, "--cluster-name", "dev")
-	if err != nil || !strings.HasPrefix(stdout, "Installed the entry for Host *.dev.jk8s") {
-		t.Errorf("--cluster-name dev: %q, %v; want the entry replaced", stdout, err)
+	// With the name given, the replacement is deliberate and the changed route is said;
+	// another name adds an entry.
+	stdout, stderr, err := runWithStderr(t, "ssh-config", "--write", "--ssh-config-file", file, "--kubeconfig", kubeconfig,
+		"--command", kwCommand, "--context", testutil.ARNContext, "--cluster-name", "dev")
+	if err != nil || !strings.HasPrefix(stdout, "Installed the entry for Host *.dev.jk8s") ||
+		!strings.Contains(stderr, `routed context "dev" and now routes context "`+testutil.ARNContext+`"`) {
+		t.Errorf("--cluster-name dev: %q, stderr %q, %v; want the entry replaced with the route change on stderr",
+			stdout, stderr, err)
 	}
 	stdout, err = write("--context", "dev", "--cluster-name", "dev-west")
 	if err != nil || !strings.HasPrefix(stdout, "Installed the entry for Host *.dev-west.jk8s") {

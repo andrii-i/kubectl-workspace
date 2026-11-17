@@ -69,12 +69,15 @@ type InstalledEntry struct {
 	Cluster    string
 	Context    string
 	Kubeconfig string
+	// Damaged is the marker error of an entry whose markers do not pair up; its flags
+	// were read as far as the next marker. Nil for an intact entry.
+	Damaged error
 }
 
 // EntriesForContext returns the entries in the file at path whose ProxyCommand runs
 // connect with contextName, in file order. windows selects the quoting the entries
-// were written with. An entry with broken markers is skipped here; Install and Remove
-// report it when they are asked for that cluster.
+// were written with. An entry with broken markers comes back with Damaged set, so a
+// lookup can skip it and a command about to act on the file can report it.
 func EntriesForContext(path, contextName string, windows bool) ([]InstalledEntry, error) {
 	_, content, _, err := load(path)
 	if err != nil {
@@ -89,15 +92,28 @@ func EntriesForContext(path, contextName string, windows bool) ([]InstalledEntry
 		}
 		start, end, err := findEntry(lines, cluster)
 		if err != nil {
-			continue
+			start, end = i, nextMarker(lines, i+1)-1
 		}
 		entry := readEntry(cluster, lines[start:end+1], windows)
+		entry.Damaged = err
 		if entry.Context == contextName {
 			entries = append(entries, entry)
 		}
 		i = end
 	}
 	return entries, nil
+}
+
+// nextMarker returns the index of the first marker line at or after from, or the
+// number of lines when there is none.
+func nextMarker(lines []string, from int) int {
+	for i := from; i < len(lines); i++ {
+		trimmed := strings.TrimSpace(lines[i])
+		if strings.HasPrefix(trimmed, startMarkerPrefix) || strings.HasPrefix(trimmed, endMarkerPrefix) {
+			return i
+		}
+	}
+	return len(lines)
 }
 
 // readEntry reads the connect flags out of an entry's ProxyCommand line.

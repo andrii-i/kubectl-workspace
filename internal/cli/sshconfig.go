@@ -80,17 +80,19 @@ func (o *sshConfigOptions) run() error {
 	if err != nil {
 		return err
 	}
-	if o.clusterName == "" {
-		if err := refuseTakeover(path, entry); err != nil {
-			return err
-		}
+	warning, err := checkReplacement(path, entry, o.clusterName != "")
+	if err != nil {
+		return err
 	}
 	if err := sshconfig.Install(path, entry); err != nil {
 		return err
 	}
 	_, _ = fmt.Fprintf(o.streams.Out, "Installed the entry for Host %s in %s.\n", entry.HostPattern(), path)
+	if warning != "" {
+		warnf(o.streams.Err, "%s", warning)
+	}
 	removeArgs := sshConfigHintArgs(removeFlag, o.sshConfigFile)
-	others, _ := installedClusters(entry.Context, entry.Kubeconfig, o.sshConfigFile)
+	others, _, _ := installedClusters(entry.Context, entry.Kubeconfig, o.sshConfigFile)
 	for _, other := range others {
 		if other != entry.Cluster {
 			warnf(o.streams.Err, "%s also routes context %q under the cluster name %q; drop it with: %s", path,
@@ -102,18 +104,26 @@ func (o *sshConfigOptions) run() error {
 	return nil
 }
 
-// refuseTakeover keeps a --write under a derived cluster name from replacing an entry
-// that routes another cluster: two EKS clusters named alike derive the same name, and
-// the second write would silently take over the first's entry. With --cluster-name
-// the replacement is the user's choice.
-func refuseTakeover(path string, entry sshconfig.Entry) error {
+// checkReplacement looks at the entry a --write is about to replace. Under a derived
+// cluster name, an entry that routes another cluster is refused: two EKS clusters named
+// alike derive the same name, and the write would silently take over the first's entry.
+// With --cluster-name the replacement is the user's choice. Any replaced entry whose
+// route changes, the context or the kubeconfig pin, earns a warning, since ssh then
+// reaches another cluster or resolves the context in another file.
+func checkReplacement(path string, entry sshconfig.Entry, named bool) (warning string, err error) {
 	installed, ok, err := sshconfig.EntryFor(path, entry.Cluster, runtime.GOOS == goosWindows)
-	if err != nil || !ok || !routesAnother(installed, entry.Context, entry.Kubeconfig) {
-		return err
+	if err != nil || !ok || installed.Context == "" {
+		return "", err
 	}
 	theirs, ours := routePair(installed, sshconfig.InstalledEntry{Context: entry.Context, Kubeconfig: entry.Kubeconfig})
-	return fmt.Errorf("%s already routes %s under the cluster name %q; pass --cluster-name to put %s under "+
-		"another name, or --cluster-name %s to replace that entry", path, theirs, entry.Cluster, ours, entry.Cluster)
+	if !named && routesAnother(installed, entry.Context, entry.Kubeconfig) {
+		return "", fmt.Errorf("%s already routes %s under the cluster name %q; pass --cluster-name to put %s under "+
+			"another name, or --cluster-name %s to replace that entry", path, theirs, entry.Cluster, ours, entry.Cluster)
+	}
+	if theirs != ours {
+		return fmt.Sprintf("the entry for cluster %q routed %s and now routes %s", entry.Cluster, theirs, ours), nil
+	}
+	return "", nil
 }
 
 // removeEntry deletes the entry clusterToRemove names.
@@ -143,7 +153,7 @@ func (o *sshConfigOptions) removeEntry() error {
 // the entry installed for the context. With the flag the kubeconfig is not read, so an
 // entry whose context is gone can still be removed. The derived default never counts:
 // it could name another context's entry. Empty, after a note, when nothing routes the
-// context.
+// context; an unreadable file or a damaged entry routing the context is an error.
 func (o *sshConfigOptions) clusterToRemove(path string) (string, error) {
 	if o.clusterName != "" {
 		return o.clusterName, sshconfig.ValidateClusterName(o.clusterName)
@@ -156,7 +166,11 @@ func (o *sshConfigOptions) clusterToRemove(path string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	cluster, err := installedCluster(target.Context, kubeconfig, o.sshConfigFile)
+	clusters, _, err := installedClusters(target.Context, kubeconfig, o.sshConfigFile)
+	if err != nil {
+		return "", err
+	}
+	cluster, err := pickInstalledCluster(clusters, path, target.Context)
 	if err != nil {
 		return "", err
 	}

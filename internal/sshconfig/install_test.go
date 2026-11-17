@@ -12,7 +12,6 @@ import (
 	"runtime"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/jupyter-infra/kubectl-workspace/internal/testutil"
 )
@@ -257,7 +256,7 @@ func TestEntryForRejectsAPartialEntry(t *testing.T) {
 }
 
 // A block pasted twice, or a stray marker after a complete block, is a damaged file:
-// the lookup skips it and the writes refuse it, instead of acting on the first copy.
+// the lookup marks it and the writes refuse it, instead of acting on the first copy.
 func TestDuplicatedMarkersAreDamage(t *testing.T) {
 	rendered := testEntry().Render()
 	tests := map[string]string{
@@ -268,20 +267,14 @@ func TestDuplicatedMarkersAreDamage(t *testing.T) {
 	for name, content := range tests {
 		t.Run(name, func(t *testing.T) {
 			path := writeFile(t, content)
-			done := make(chan struct{})
-			var entries []InstalledEntry
-			var err error
-			go func() {
-				entries, err = EntriesForContext(path, "prod", false)
-				close(done)
-			}()
-			select {
-			case <-done:
-			case <-time.After(5 * time.Second):
-				t.Fatal("EntriesForContext did not return")
+			entries, err := EntriesForContext(path, "prod", false)
+			if err != nil || len(entries) == 0 {
+				t.Fatalf("entries = %v, %v; want the entry returned, marked damaged", entries, err)
 			}
-			if err != nil || len(entries) != 0 {
-				t.Errorf("entries = %v, %v; want the damaged entry skipped", entries, err)
+			for _, e := range entries {
+				if e.Damaged == nil || e.Cluster != "prod" {
+					t.Errorf("entry %+v; want cluster prod marked damaged", e)
+				}
 			}
 			if _, err := Remove(path, "prod"); err == nil || !strings.Contains(err.Error(), "remove the entries by hand") {
 				t.Errorf("Remove error = %v, want a request to repair the file by hand", err)
@@ -373,14 +366,26 @@ func TestEntriesForContext(t *testing.T) {
 	}
 }
 
-func TestEntriesForContextSkipsADamagedEntry(t *testing.T) {
+// A damaged entry comes back marked, with the flags read as far as the next marker, so
+// a lookup can leave it out and a command about to act on the file can report it.
+func TestEntriesForContextMarksADamagedEntry(t *testing.T) {
 	path := writeFile(t, startMarker("broken")+"\n  ProxyCommand kw connect --stdio --context prod %h\n")
 	if err := Install(path, testEntry()); err != nil {
 		t.Fatal(err)
 	}
 	entries, err := EntriesForContext(path, "prod", false)
-	if err != nil || len(entries) != 1 || entries[0].Cluster != "prod" {
-		t.Errorf("entries = %v, %v; want the intact entry alone", entries, err)
+	if err != nil || len(entries) != 2 {
+		t.Fatalf("entries = %v, %v; want the damaged and the intact entry", entries, err)
+	}
+	byCluster := map[string]InstalledEntry{}
+	for _, e := range entries {
+		byCluster[e.Cluster] = e
+	}
+	if e := byCluster["broken"]; e.Damaged == nil || !strings.Contains(e.Damaged.Error(), "no end marker") {
+		t.Errorf("broken entry = %+v; want it marked damaged for its missing end marker", e)
+	}
+	if e := byCluster["prod"]; e.Context != "prod" || e.Damaged != nil {
+		t.Errorf("prod entry = %+v; want the intact entry", e)
 	}
 }
 
