@@ -106,7 +106,7 @@ func installedClusters(contextName, kubeconfig, path string) ([]string, error) {
 			if damaged == nil {
 				damaged = fmt.Errorf("%s: %w", path, e.Damaged)
 			}
-		case e.Kubeconfig == kubeconfig:
+		case samePin(e.Kubeconfig, kubeconfig):
 			same = append(same, e.Cluster)
 		case e.Kubeconfig == "" || kubeconfig == "":
 			oneSided = append(oneSided, e.Cluster)
@@ -143,7 +143,14 @@ func routesAnother(installed sshconfig.InstalledEntry, contextName, kubeconfig s
 		return false
 	}
 	return installed.Context != contextName ||
-		(installed.Kubeconfig != "" && kubeconfig != "" && installed.Kubeconfig != kubeconfig)
+		(installed.Kubeconfig != "" && kubeconfig != "" && !samePin(installed.Kubeconfig, kubeconfig))
+}
+
+// samePin reports whether two kubeconfig pins name the same file: the same spelling,
+// or two spellings of one file, as a dotfiles symlink or a case difference on a
+// case-insensitive filesystem gives. An empty pin matches only an empty pin.
+func samePin(a, b string) bool {
+	return a == b || (a != "" && b != "" && sameFile(a, b))
 }
 
 // routeOf names what an entry routes, for messages.
@@ -157,7 +164,7 @@ func routeOf(e sshconfig.InstalledEntry) string {
 // routePair names what two entries route, for a message that contrasts them: the
 // kubeconfig file appears only when it tells them apart.
 func routePair(a, b sshconfig.InstalledEntry) (string, string) {
-	if a.Kubeconfig == b.Kubeconfig {
+	if samePin(a.Kubeconfig, b.Kubeconfig) {
 		a.Kubeconfig, b.Kubeconfig = "", ""
 	}
 	return routeOf(a), routeOf(b)

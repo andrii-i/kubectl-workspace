@@ -330,3 +330,18 @@ func TestOpenStopsOnADamagedEntryForTheContext(t *testing.T) {
 		t.Errorf("--print-only: stdout = %q, %v; want the derived alias printed", stdout, err)
 	}
 }
+
+// A kubeconfig pin is matched as a file: an entry pinned through a dotfiles link is found
+// from the path the link points at.
+func TestOpenMatchesTheKubeconfigPinByFile(t *testing.T) {
+	kubeconfig := staticKubeconfig(t)
+	link := filepath.Join(t.TempDir(), "kubeconfig")
+	testutil.Symlink(t, kubeconfig, link)
+	configFile := filepath.Join(t.TempDir(), "config")
+	installEntry(t, configFile, sshconfig.Entry{Cluster: "pinned", Context: "dev", Kubeconfig: link})
+
+	stdout, err := run(t, "open", "--kubeconfig", kubeconfig, "--ssh-config-file", configFile, "--print-only", "ws1")
+	if err != nil || !strings.Contains(stdout, "ssh ws1.team-a.pinned.jk8s\n") {
+		t.Errorf("stdout = %q, %v; want the alias under the entry pinned through the link", stdout, err)
+	}
+}

@@ -658,3 +658,23 @@ func TestSSHConfigResolvesTheCommandPath(t *testing.T) {
 		t.Errorf("entry =\n%s\nwant a bare name left to the PATH lookup", stdout)
 	}
 }
+
+// A kubeconfig pin is a file, not a spelling: an entry pinned through a dotfiles link is
+// the entry for the file the link points at, so a rerun through the other spelling
+// neither takes it for another cluster nor reports a changed route.
+func TestSSHConfigTreatsTwoSpellingsOfTheKubeconfigAsOnePin(t *testing.T) {
+	kubeconfig := staticKubeconfig(t)
+	link := filepath.Join(t.TempDir(), "kubeconfig")
+	testutil.Symlink(t, kubeconfig, link)
+	file := filepath.Join(t.TempDir(), "config")
+	if _, err := run(t, "ssh-config", "--write", "--ssh-config-file", file, "--kubeconfig", kubeconfig, "--command", kwCommand,
+		"--cluster-name", "pinned"); err != nil {
+		t.Fatal(err)
+	}
+
+	stdout, stderr, err := runWithStderr(t, "ssh-config", "--write", "--ssh-config-file", file, "--kubeconfig", link,
+		"--command", kwCommand)
+	if err != nil || !strings.HasPrefix(stdout, "Installed the entry for Host *.pinned.jk8s") || stderr != "" {
+		t.Errorf("rerun through the link: %q, stderr %q, %v; want the pinned entry found and replaced quietly", stdout, stderr, err)
+	}
+}
