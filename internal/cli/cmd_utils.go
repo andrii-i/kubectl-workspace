@@ -147,7 +147,7 @@ func warnAboutDamage(w io.Writer, path, contextName string) {
 // routesAnother reports whether an installed entry routes another cluster than the
 // context and kubeconfig at hand: another context name, or the same name pinned to
 // another kubeconfig file; an unpinned side matches any file. An entry whose
-// ProxyCommand the plugin cannot read is not judged.
+// ProxyCommand the plugin cannot read is not judged here; the callers refuse it.
 func routesAnother(installed sshconfig.InstalledEntry, contextName, kubeconfig string) bool {
 	if installed.Context == "" {
 		return false

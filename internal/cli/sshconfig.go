@@ -115,6 +115,12 @@ func (o *sshConfigOptions) warnAboutOtherEntries(path string, entry sshconfig.En
 		if entry.Kubeconfig == "" && other.Kubeconfig != "" {
 			continue
 		}
+		// A name edited into a marker by hand may not be safe on a command line.
+		if err := sshconfig.ValidateClusterName(other.Cluster); err != nil {
+			warnf(o.streams.Err, "%s also routes context %q under the cluster name %q, which cannot be the cluster name "+
+				"in the alias (%v); remove it by hand", path, entry.Context, other.Cluster, err)
+			continue
+		}
 		hint := kubectlWorkspaceCommand("ssh-config", o.kubeconfig, entry.Context, other.Cluster, removeArgs...)
 		warnf(o.streams.Err, "%s also routes context %q under the cluster name %q; remove it with: %s", path,
 			entry.Context, other.Cluster, hint)
@@ -124,13 +130,22 @@ func (o *sshConfigOptions) warnAboutOtherEntries(path string, entry sshconfig.En
 // checkReplacement looks at the entry a --write is about to replace. Under a derived
 // cluster name, an entry that routes another cluster is refused: two EKS clusters named
 // alike derive the same name, and the write would silently take over the first's entry.
-// With --cluster-name the replacement is the user's choice. Any replaced entry whose
-// route changes, the context or the kubeconfig pin, earns a warning, since ssh then
-// reaches another cluster or resolves the context in another file.
+// With --cluster-name the replacement is the user's choice. An entry whose ProxyCommand
+// the plugin cannot read, as after a hand edit, is refused the same way, since it may be
+// another cluster's. Any replaced entry whose route changes, the context or the
+// kubeconfig pin, earns a warning, since ssh then reaches another cluster or resolves the
+// context in another file.
 func checkReplacement(path string, entry sshconfig.Entry, named bool) (warning string, err error) {
 	installed, ok, err := sshconfig.EntryFor(path, entry.Cluster, runtime.GOOS == goosWindows)
-	if err != nil || !ok || installed.Context == "" {
+	if err != nil || !ok {
 		return "", err
+	}
+	if installed.Context == "" {
+		if named {
+			return "", nil
+		}
+		return "", fmt.Errorf("%s has an entry for the cluster name %q whose ProxyCommand the plugin cannot read; "+
+			"pass --cluster-name %s to replace it", path, entry.Cluster, entry.Cluster)
 	}
 	theirs, ours := routePair(installed, sshconfig.InstalledEntry{Context: entry.Context, Kubeconfig: entry.Kubeconfig})
 	if !named && routesAnother(installed, entry.Context, entry.Kubeconfig) {

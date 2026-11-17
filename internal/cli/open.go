@@ -101,6 +101,9 @@ func (o *openOptions) run(ctx context.Context, workspace string) error {
 	link := editorLink(o.editor, alias, o.remotePath)
 
 	if o.printOnly {
+		if err := o.refuseOtherClustersEntry(cluster, target.Context, kubeconfig); err != nil {
+			return err
+		}
 		_, _ = fmt.Fprintln(o.streams.Out, link)
 		_, _ = fmt.Fprintf(o.streams.Out, "ssh %s\n", alias)
 		return nil
@@ -123,9 +126,9 @@ func (o *openOptions) run(ctx context.Context, workspace string) error {
 	return launchURL(ctx, link)
 }
 
-// checkEntry fails with the setup command when the cluster has no SSH entry yet,
-// which the editor would otherwise report as an unreachable host, and refuses an
-// entry under the cluster's name that routes another cluster.
+// checkEntry fails with the setup command when the cluster has no SSH entry yet, which
+// the editor would otherwise report as an unreachable host, and refuses an entry under
+// the cluster's name that routes another cluster or that the plugin cannot read.
 func (o *openOptions) checkEntry(cluster, contextName, kubeconfig string) error {
 	path, err := sshConfigPath(o.sshConfigFile)
 	if err != nil {
@@ -139,6 +142,36 @@ func (o *openOptions) checkEntry(cluster, contextName, kubeconfig string) error 
 		return fmt.Errorf("%s has no entry for cluster %q; run: %s", path, cluster,
 			kubectlWorkspaceCommand("ssh-config", o.kubeconfig, contextName, cluster,
 				sshConfigHintArgs(writeFlag, o.sshConfigFile)...))
+	}
+	return o.refuseOtherCluster(path, installed, cluster, contextName, kubeconfig)
+}
+
+// refuseOtherClustersEntry is checkEntry for --print-only: a missing file, a missing
+// entry or damage is tolerated, since printing needs no file, but an entry under the
+// cluster's name that routes another cluster would make the printed alias land there.
+func (o *openOptions) refuseOtherClustersEntry(cluster, contextName, kubeconfig string) error {
+	path, err := sshConfigPath(o.sshConfigFile)
+	if err != nil {
+		return nil
+	}
+	installed, ok, err := sshconfig.EntryFor(path, cluster, runtime.GOOS == goosWindows)
+	if err != nil || !ok {
+		return nil
+	}
+	return o.refuseOtherCluster(path, installed, cluster, contextName, kubeconfig)
+}
+
+// refuseOtherCluster refuses the installed entry under the cluster's name when it routes
+// another cluster, or when the plugin cannot read what it routes, as after a hand edit
+// of its ProxyCommand; --cluster-name, given on purpose, overrides the second.
+func (o *openOptions) refuseOtherCluster(path string, installed sshconfig.InstalledEntry, cluster, contextName,
+	kubeconfig string) error {
+	if installed.Context == "" {
+		if o.clusterName != "" {
+			return nil
+		}
+		return fmt.Errorf("%s has an entry for the cluster name %q whose ProxyCommand the plugin cannot read; "+
+			"pass --cluster-name %s to connect through it anyway", path, cluster, cluster)
 	}
 	if routesAnother(installed, contextName, kubeconfig) {
 		theirs, ours := routePair(installed, sshconfig.InstalledEntry{Context: contextName, Kubeconfig: kubeconfig})

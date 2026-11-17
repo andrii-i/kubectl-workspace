@@ -295,7 +295,7 @@ func TestSSHConfigRemoveReportsADamagedEntry(t *testing.T) {
 func TestSSHConfigRemoveDropsAHandEditedName(t *testing.T) {
 	kubeconfig := staticKubeconfig(t)
 	file := filepath.Join(t.TempDir(), "config")
-	writeConfig(t, file, renderedEntry("My Cluster", "dev"))
+	writeConfig(t, file, renderedEntry("My Cluster"))
 
 	_, err := run(t, "ssh-config", "--remove", "--ssh-config-file", file, "--kubeconfig", kubeconfig)
 	if err == nil || !strings.Contains(err.Error(), "cannot be the cluster name in the alias") || !strings.Contains(err.Error(), "--cluster-name") {
@@ -328,9 +328,13 @@ func TestSSHConfigNamesDamageOnce(t *testing.T) {
 	}
 }
 
+// rewrittenEntry is an entry for cluster dev whose ProxyCommand a user replaced by hand;
+// the plugin cannot read a context out of it.
+const rewrittenEntry = "# kubectl-workspace: start dev\nHost *.dev.jk8s\n  ProxyCommand ssh -W %h:%p jump\n# kubectl-workspace: end dev\n"
+
 // brokenEntry is what is left of an entry for cluster jd routing context dev after its
 // end marker was lost: OpenSSH still honours its Host line.
-var brokenEntry = strings.TrimSuffix(renderedEntry("jd", "dev"), "# kubectl-workspace: end jd\n")
+var brokenEntry = strings.TrimSuffix(renderedEntry("jd"), "# kubectl-workspace: end jd\n")
 
 // --write under a free name and --remove of the intact entry, by context or by the name
 // the pasted hint carries, all succeed next to a damaged entry routing the same context,
@@ -439,6 +443,51 @@ func TestSSHConfigRefusesToTakeOverAnotherContextsEntry(t *testing.T) {
 	if err != nil || strings.Count(string(content), "kubectl-workspace: start") != 2 ||
 		!strings.Contains(string(content), "--context "+testutil.ARNContext+" ") {
 		t.Errorf("file:\n%s\n%v; want the ARN entry under dev and a dev-west entry", content, err)
+	}
+}
+
+// An entry whose ProxyCommand the plugin cannot read, one a user rewrote by hand, may be
+// another cluster's: a --write under its derived name is refused, and --cluster-name
+// replaces it on purpose.
+func TestSSHConfigRefusesToReplaceAnEntryItCannotRead(t *testing.T) {
+	kubeconfig := staticKubeconfig(t)
+	file := filepath.Join(t.TempDir(), "config")
+	writeConfig(t, file, rewrittenEntry)
+	write := func(extra ...string) (string, error) {
+		args := append([]string{"ssh-config", "--write", "--ssh-config-file", file, "--kubeconfig", kubeconfig,
+			"--command", kwCommand}, extra...)
+		return run(t, args...)
+	}
+
+	_, err := write()
+	if err == nil || !strings.Contains(err.Error(), "cannot read") || !strings.Contains(err.Error(), "--cluster-name dev") {
+		t.Errorf("error = %v; want the unreadable entry refused with the flag named", err)
+	}
+	if content, err := os.ReadFile(file); err != nil || string(content) != rewrittenEntry {
+		t.Errorf("file after the refused --write:\n%s\n%v; want it untouched", content, err)
+	}
+	stdout, err := write("--cluster-name", "dev")
+	if err != nil || !strings.HasPrefix(stdout, "Installed the entry for Host *.dev.jk8s") {
+		t.Errorf("--cluster-name dev: %q, %v; want the entry replaced", stdout, err)
+	}
+	if content, err := os.ReadFile(file); err != nil || strings.Contains(string(content), "jump") ||
+		!strings.Contains(string(content), "--context dev ") {
+		t.Errorf("file:\n%s\n%v; want the rewritten entry gone and the plugin's in its place", content, err)
+	}
+}
+
+// A marker name edited by hand may not be safe on a command line: the warning names the
+// entry and leaves the removal to a hand instead of printing a command to paste.
+func TestSSHConfigNamesAnEntryUnderAnUnsafeNameWithoutAHint(t *testing.T) {
+	kubeconfig := staticKubeconfig(t)
+	file := filepath.Join(t.TempDir(), "config")
+	writeConfig(t, file, renderedEntry("x&calc!"))
+
+	_, stderr, err := runWithStderr(t, "ssh-config", "--write", "--ssh-config-file", file, "--kubeconfig", kubeconfig,
+		"--command", kwCommand, "--cluster-name", "new")
+	if err != nil || !strings.Contains(stderr, `"x&calc!"`) || !strings.Contains(stderr, "remove it by hand") ||
+		strings.Contains(stderr, "--cluster-name") {
+		t.Errorf("stderr = %q, %v; want the entry named for a hand removal and no command to paste", stderr, err)
 	}
 }
 

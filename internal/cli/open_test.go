@@ -134,10 +134,10 @@ func installEntry(t *testing.T, configFile string, entry sshconfig.Entry) {
 	}
 }
 
-// renderedEntry returns the entry as ssh-config --write writes it, for a fixture Install
-// would refuse: a name that is no label, or a block about to be damaged.
-func renderedEntry(cluster, contextName string) string {
-	return sshconfig.Entry{Cluster: cluster, Context: contextName, Command: kwCommand, User: "jovyan",
+// renderedEntry returns the entry for context dev as ssh-config --write writes it, for a
+// fixture Install would refuse: a name that is no label, or a block about to be damaged.
+func renderedEntry(cluster string) string {
+	return sshconfig.Entry{Cluster: cluster, Context: "dev", Command: kwCommand, User: "jovyan",
 		Windows: runtime.GOOS == goosWindows}.Render()
 }
 
@@ -255,7 +255,7 @@ func TestOpenReadsTheClusterNameFromTheInstalledEntry(t *testing.T) {
 // says so and names the flag, as every other failure to pick a cluster name does.
 func TestOpenRefusesAnEditedEntryWhoseNameIsNoLabel(t *testing.T) {
 	configFile := filepath.Join(t.TempDir(), "config")
-	writeConfig(t, configFile, renderedEntry("My Cluster", "dev"))
+	writeConfig(t, configFile, renderedEntry("My Cluster"))
 	_, err := run(t, "open", "--kubeconfig", staticKubeconfig(t), "--ssh-config-file", configFile, "--print-only", "ws1")
 	if err == nil || !strings.Contains(err.Error(), "cannot be the cluster name in the alias") || !strings.Contains(err.Error(), "--cluster-name") {
 		t.Errorf("error = %v, want the edited name refused with the flag named", err)
@@ -316,9 +316,13 @@ func TestOpenRefusesAnEntryRoutingAnotherCluster(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			configFile := filepath.Join(t.TempDir(), "config")
 			installEntry(t, configFile, tt.installed)
-			_, err := run(t, "open", "--kubeconfig", kubeconfig, "--ssh-config-file", configFile, "--context", "dev", "ws1")
-			if err == nil || !strings.Contains(err.Error(), tt.wantRoute) || !strings.Contains(err.Error(), "--cluster-name") {
-				t.Errorf("error = %v, want the entry's route named and the flag", err)
+			// The printed alias would land in the other cluster too, so --print-only refuses alike.
+			for _, extra := range [][]string{nil, {"--print-only"}} {
+				args := append([]string{"open", "--kubeconfig", kubeconfig, "--ssh-config-file", configFile, "--context", "dev"}, extra...)
+				_, err := run(t, append(args, "ws1")...)
+				if err == nil || !strings.Contains(err.Error(), tt.wantRoute) || !strings.Contains(err.Error(), "--cluster-name") {
+					t.Errorf("%v: error = %v, want the entry's route named and the flag", extra, err)
+				}
 			}
 		})
 	}
@@ -352,5 +356,22 @@ func TestOpenMatchesTheKubeconfigPinByFile(t *testing.T) {
 	stdout, err := run(t, "open", "--kubeconfig", kubeconfig, "--ssh-config-file", configFile, "--print-only", "ws1")
 	if err != nil || !strings.Contains(stdout, "ssh ws1.team-a.pinned.jk8s\n") {
 		t.Errorf("stdout = %q, %v; want the alias under the entry pinned through the link", stdout, err)
+	}
+}
+
+// An entry under the cluster name whose ProxyCommand the plugin cannot read, one a user
+// rewrote by hand, may be another cluster's: open refuses it until --cluster-name names
+// it on purpose, and then goes on to the operator through it.
+func TestOpenRefusesAnEntryItCannotRead(t *testing.T) {
+	kubeconfig := staticKubeconfig(t)
+	configFile := filepath.Join(t.TempDir(), "config")
+	writeConfig(t, configFile, rewrittenEntry)
+	_, err := run(t, "open", "--kubeconfig", kubeconfig, "--ssh-config-file", configFile, "ws1")
+	if err == nil || !strings.Contains(err.Error(), "cannot read") || !strings.Contains(err.Error(), "--cluster-name dev") {
+		t.Errorf("error = %v; want the unreadable entry refused with the flag named", err)
+	}
+	_, err = run(t, "open", "--kubeconfig", kubeconfig, "--ssh-config-file", configFile, "--cluster-name", "dev", "ws1")
+	if err == nil || strings.Contains(err.Error(), "cannot read") || strings.Contains(err.Error(), "routes") {
+		t.Errorf("with the flag: error = %v; want open past the entry check, failing only at the unreachable operator", err)
 	}
 }
