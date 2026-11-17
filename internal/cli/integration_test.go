@@ -12,12 +12,14 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"syscall"
 	"testing"
 	"time"
 
 	"github.com/jupyter-infra/kubectl-workspace/internal/testutil"
+	"k8s.io/client-go/tools/clientcmd"
 )
 
 // runMainEnv makes the test binary run the plugin's Main instead of the tests,
@@ -43,8 +45,9 @@ func TestMain(m *testing.M) {
 }
 
 // runWithOwnHome runs the tests with the home directory pointed at an empty temporary
-// directory: the commands default to ~/.ssh/config, so without it a developer's own
-// entries would leak into the tests.
+// directory: the commands default to ~/.ssh/config and ~/.kube/config, so without it a
+// developer's own entries and contexts would leak into the tests. client-go resolves
+// its default kubeconfig path when its package loads, so it is pointed over as well.
 func runWithOwnHome(m *testing.M) int {
 	home, err := os.MkdirTemp("", "kubectl-workspace-home")
 	if err != nil {
@@ -58,6 +61,7 @@ func runWithOwnHome(m *testing.M) int {
 			return 1
 		}
 	}
+	clientcmd.RecommendedHomeFile = filepath.Join(home, clientcmd.RecommendedHomeDir, clientcmd.RecommendedFileName)
 	return m.Run()
 }
 
