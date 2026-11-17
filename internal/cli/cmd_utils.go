@@ -162,7 +162,7 @@ func clusterName(flag, contextName string) (string, error) {
 	if name, ok := eksClusterName(contextName); ok {
 		candidate = name
 	}
-	// OpenSSH lowercases host names before matching, and ParseAlias with it.
+	// OpenSSH lowercases host names before matching, and ParseAlias lowercases too.
 	candidate = strings.ToLower(candidate)
 	if err := sshconfig.ValidateClusterName(candidate); err != nil {
 		return "", fmt.Errorf("%q cannot be the cluster name in the alias (%w); pass --cluster-name", candidate, err)

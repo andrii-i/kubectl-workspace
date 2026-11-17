@@ -37,7 +37,7 @@ the operator's dependency graph out of this binary.
   `Main`, which maps signals and errors to the exit code.
 - `internal/sshconfig`: the alias `<workspace>.<namespace>.<cluster>.jk8s` and the
   per-cluster entry `Host *.<cluster>.jk8s`, rendered between marker comments and
-  installed into `~/.ssh/config`.
+  installed into, read back from and removed from `~/.ssh/config`.
 - `internal/kube`: kubeconfig loading with client-go's `clientcmd`, the exec
   credential plugin run under a deadline, and the `WorkspaceConnection` request to
   the operator's extension API.
@@ -83,8 +83,9 @@ the operator's dependency graph out of this binary.
   in the alias, because EKS context names contain `:` and `/`; the entry carries it,
   and the kubeconfig file when the user chose one. A context named like an EKS
   cluster ARN gets the cluster name inside the ARN as its label by default, and
-  `open` reads the label back from the entry written for the context and kubeconfig,
-  so a label chosen by hand is typed once, at `ssh-config --write`.
+  `open` and `ssh-config` read the label back from the entry installed for the
+  context, preferring one written for the same kubeconfig, so a label chosen by hand
+  is typed once, at the first `ssh-config --write`.
 - The entry goes before the first `Host` or `Match` block and the comment lines directly
   above it, and after everything else above them. A `Host` block runs to the next `Host`
   or `Match`, so an entry placed above a top-level `Include` would capture the included

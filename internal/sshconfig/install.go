@@ -57,7 +57,7 @@ func Installed(path, cluster string) (bool, error) {
 	return start >= 0, nil
 }
 
-// InstalledEntry is what the lookup reads back from an entry: its cluster label and
+// InstalledEntry is what EntriesForContext reads back from an entry: its cluster label and
 // the context and kubeconfig file its ProxyCommand runs connect with, the kubeconfig
 // empty when connect uses the default lookup.
 type InstalledEntry struct {
@@ -118,7 +118,7 @@ func readEntry(cluster string, block []string, windows bool) InstalledEntry {
 
 // Remove deletes the entry for cluster from the file at path and reports whether
 // there was one. Of the blank lines Install put around the entry, one goes with it,
-// so its former neighbours end up separated by at most one.
+// so the file reads as it did before Install.
 func Remove(path, cluster string) (bool, error) {
 	path, content, mode, err := load(path)
 	if err != nil {

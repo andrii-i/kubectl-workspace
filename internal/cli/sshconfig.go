@@ -97,7 +97,9 @@ func (o *sshConfigOptions) run() error {
 	return nil
 }
 
-// removeEntry deletes the cluster's entry; the cluster is resolved as for --write.
+// removeEntry deletes the cluster's entry. With --cluster-name the kubeconfig is not
+// read, so an entry whose context is gone can still be removed; without it the
+// cluster is resolved as for --write.
 func (o *sshConfigOptions) removeEntry() error {
 	cluster := o.clusterName
 	if cluster == "" {

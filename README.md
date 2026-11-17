@@ -35,11 +35,12 @@ Host *.<cluster>.jk8s
 # kubectl-workspace: end <cluster>
 ```
 
-`<cluster>` is the context name, or for a context named like an EKS cluster ARN,
-which cannot be a host-name label itself, the cluster name inside the ARN;
-`--cluster-name` picks another name. Running the command again replaces the entry for
-the same cluster name, `--remove` deletes it. From then on every workspace in the
-cluster is an SSH host:
+`<cluster>` is the context name, lowercased. A context named like an EKS cluster ARN
+cannot be a host-name label, so the cluster name inside the ARN serves instead;
+`--cluster-name` picks another name, and later commands read it back from the entry,
+so it is typed once. Running the command again replaces the entry for the same
+cluster name, and `--remove` deletes it. From then on every workspace in the cluster
+is an SSH host:
 
 ```
 ssh <workspace>.<namespace>.<cluster>.jk8s
@@ -107,7 +108,7 @@ Global flags, on every command:
 | `--write` | off | Install the entry into the SSH configuration file; without it the entry is printed |
 | `--remove` | off | Remove the cluster's entry from the SSH configuration file |
 | `--cluster-name` | from the installed entry, else the context name or the cluster name in an EKS ARN | The `<cluster>` label of the aliases |
-| `--ssh-config-file` | `~/.ssh/config` | The file to install into |
+| `--ssh-config-file` | `~/.ssh/config` | The SSH configuration file |
 | `--command` | this binary | Path or name of `kubectl-workspace` for the ProxyCommand |
 | `--user` | `jovyan` | SSH user name in the entry |
 | `--credential-timeout` | `5s` | Written into the entry when it differs from the default |
