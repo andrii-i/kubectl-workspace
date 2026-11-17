@@ -85,7 +85,8 @@ func (o *sshConfigOptions) run() error {
 	}
 	_, _ = fmt.Fprintf(o.streams.Out, "Installed the entry for Host %s in %s.\n", entry.HostPattern(), path)
 	removeArgs := sshConfigHintArgs(removeFlag, o.sshConfigFile)
-	for _, other := range installedClusters(entry.Context, entry.Kubeconfig, o.sshConfigFile) {
+	others, _ := installedClusters(entry.Context, entry.Kubeconfig, o.sshConfigFile)
+	for _, other := range others {
 		if other != entry.Cluster {
 			warnf(o.streams.Err, "%s also routes context %q under the cluster name %q; drop it with: %s", path,
 				entry.Context, other, kubectlWorkspaceCommand("ssh-config", o.kubeconfig, entry.Context, other, removeArgs...))
@@ -102,7 +103,7 @@ func (o *sshConfigOptions) removeEntry() error {
 	if cluster == "" {
 		target, err := o.target()
 		if err != nil {
-			return fmt.Errorf("%w; pass --cluster-name to name the entry without its context", err)
+			return fmt.Errorf("%w; pass --cluster-name to remove the entry without reading the kubeconfig", err)
 		}
 		kubeconfig, _, err := pinnedKubeconfig(o.kubeconfig)
 		if err != nil {
@@ -123,7 +124,7 @@ func (o *sshConfigOptions) removeEntry() error {
 		return err
 	}
 	if !removed {
-		_, _ = fmt.Fprintf(o.streams.Out, "No entry for cluster %q in %s; --cluster-name names one under another name.\n",
+		_, _ = fmt.Fprintf(o.streams.Out, "No entry for cluster %q in %s; pass --cluster-name for an entry under another name.\n",
 			cluster, path)
 		return nil
 	}

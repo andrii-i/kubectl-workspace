@@ -46,56 +46,57 @@ func executablePath() (string, error) {
 	return exe, nil
 }
 
-// clusterForContext resolves the alias label for a context: the --cluster-name flag
-// when given, else the label of the entry already installed for the context and
-// kubeconfig in the SSH configuration file, else the default clusterName derives
-// from the context. Two entries that match need the flag to tell them apart. A file
-// that cannot be read counts as holding no entry; the command that needs the file
-// reports it.
+// clusterForContext resolves the cluster name in the alias for a context: the
+// --cluster-name flag when given, else the name of the entry already installed for the
+// context and kubeconfig in the SSH configuration file, else the label clusterName
+// derives from the context name. Two entries that match need the flag to tell them
+// apart. A file that cannot be read counts as holding no entry; the command that needs
+// the file reports it.
 func clusterForContext(flag, contextName, kubeconfig, sshConfigFile string) (string, error) {
 	if flag != "" {
 		return clusterName(flag, contextName)
 	}
-	clusters := installedClusters(contextName, kubeconfig, sshConfigFile)
+	clusters, path := installedClusters(contextName, kubeconfig, sshConfigFile)
 	switch len(clusters) {
 	case 0:
 		return clusterName("", contextName)
 	case 1:
 		if err := sshconfig.ValidateClusterName(clusters[0]); err != nil {
-			return "", fmt.Errorf("the SSH configuration file names a cluster that cannot be an alias label (%w); "+
-				"pass --cluster-name", err)
+			return "", fmt.Errorf("%s has an entry for context %q under %q, which cannot be the cluster name "+
+				"in the alias (%w); pass --cluster-name", path, contextName, clusters[0], err)
 		}
 		return clusters[0], nil
 	}
-	return "", fmt.Errorf("the SSH configuration file has entries for context %q under the cluster names %s; "+
-		"pass --cluster-name", contextName, strings.Join(clusters, ", "))
+	return "", fmt.Errorf("%s has entries for context %q under the cluster names %s; pass --cluster-name",
+		path, contextName, strings.Join(clusters, ", "))
 }
 
-// installedClusters lists the labels of the entries installed for the context,
-// sorted; none when the file cannot be read. Two kubeconfig files may name a context
-// alike, so when entries pinned to the given kubeconfig exist, only those count.
-func installedClusters(contextName, kubeconfig, sshConfigFile string) []string {
+// installedClusters lists the cluster names of the entries installed for the context,
+// sorted, and the file they were read from; none when the file cannot be read. Two
+// kubeconfig files may name a context alike, so when entries written for the given
+// kubeconfig exist, only those count.
+func installedClusters(contextName, kubeconfig, sshConfigFile string) (clusters []string, path string) {
 	path, err := sshConfigPath(sshConfigFile)
 	if err != nil {
-		return nil
+		return nil, ""
 	}
 	entries, err := sshconfig.EntriesForContext(path, contextName, runtime.GOOS == goosWindows)
 	if err != nil {
-		return nil
+		return nil, path
 	}
-	var all, pinned []string
+	var all, sameKubeconfig []string
 	for _, e := range entries {
 		all = append(all, e.Cluster)
 		if e.Kubeconfig == kubeconfig {
-			pinned = append(pinned, e.Cluster)
+			sameKubeconfig = append(sameKubeconfig, e.Cluster)
 		}
 	}
-	clusters := all
-	if len(pinned) > 0 {
-		clusters = pinned
+	clusters = all
+	if len(sameKubeconfig) > 0 {
+		clusters = sameKubeconfig
 	}
 	sort.Strings(clusters)
-	return clusters
+	return clusters, path
 }
 
 // pinnedKubeconfig returns the kubeconfig path an entry carries for the flag: the

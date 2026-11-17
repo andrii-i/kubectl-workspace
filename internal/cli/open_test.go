@@ -246,7 +246,7 @@ func TestOpenRefusesAnEditedEntryWhoseNameIsNoLabel(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, err := run(t, "open", "--kubeconfig", staticKubeconfig(t), "--ssh-config-file", configFile, "--print-only", "ws1")
-	if err == nil || !strings.Contains(err.Error(), "cannot be an alias label") || !strings.Contains(err.Error(), "--cluster-name") {
+	if err == nil || !strings.Contains(err.Error(), "cannot be the cluster name in the alias") || !strings.Contains(err.Error(), "--cluster-name") {
 		t.Errorf("error = %v, want the edited name refused with the flag named", err)
 	}
 }

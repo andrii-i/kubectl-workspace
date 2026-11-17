@@ -216,7 +216,7 @@ func TestSSHConfigRemovesTheEntry(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := "No entry for cluster \"dev\" in " + file + "; --cluster-name names one under another name.\n"; stdout != want {
+	if want := "No entry for cluster \"dev\" in " + file + "; pass --cluster-name for an entry under another name.\n"; stdout != want {
 		t.Errorf("stdout = %q, want %q", stdout, want)
 	}
 
@@ -227,7 +227,7 @@ func TestSSHConfigRemovesTheEntry(t *testing.T) {
 
 	// The context is often gone by the time its entry is removed.
 	_, err = run(t, "ssh-config", "--remove", "--ssh-config-file", file, "--kubeconfig", kubeconfig, "--context", "gone")
-	if err == nil || !strings.Contains(err.Error(), "pass --cluster-name to name the entry without its context") {
+	if err == nil || !strings.Contains(err.Error(), "pass --cluster-name to remove the entry without reading the kubeconfig") {
 		t.Errorf("error = %v, want the flag named as the way around a missing context", err)
 	}
 }
