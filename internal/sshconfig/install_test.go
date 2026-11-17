@@ -263,6 +263,7 @@ func TestDuplicatedMarkersAreDamage(t *testing.T) {
 		"the block twice":            rendered + rendered,
 		"a stray start marker after": rendered + startMarker("prod") + "\n",
 		"a stray end marker after":   rendered + endMarker("prod") + "\n",
+		"the start marker lost":      strings.TrimPrefix(rendered, startMarker("prod")+"\n"),
 	}
 	for name, content := range tests {
 		t.Run(name, func(t *testing.T) {
@@ -276,10 +277,10 @@ func TestDuplicatedMarkersAreDamage(t *testing.T) {
 					t.Errorf("entry %+v; want cluster prod marked damaged", e)
 				}
 			}
-			if _, err := Remove(path, "prod"); err == nil || !strings.Contains(err.Error(), "remove the entries by hand") {
+			if _, err := Remove(path, "prod"); err == nil || !strings.Contains(err.Error(), "by hand") {
 				t.Errorf("Remove error = %v, want a request to repair the file by hand", err)
 			}
-			if err := Install(path, testEntry()); err == nil || !strings.Contains(err.Error(), "remove the entries by hand") {
+			if err := Install(path, testEntry()); err == nil || !strings.Contains(err.Error(), "by hand") {
 				t.Errorf("Install error = %v, want a request to repair the file by hand", err)
 			}
 			if got := readFile(t, path); got != content {

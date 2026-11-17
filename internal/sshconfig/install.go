@@ -86,34 +86,76 @@ func EntriesForContext(path, contextName string, windows bool) ([]InstalledEntry
 	lines := splitLines(content)
 	var entries []InstalledEntry
 	for i := 0; i < len(lines); i++ {
-		cluster, ok := strings.CutPrefix(strings.TrimSpace(lines[i]), startMarkerPrefix)
-		if !ok {
+		trimmed := strings.TrimSpace(lines[i])
+		var cluster string
+		var block []string
+		var damaged error
+		switch {
+		case strings.HasPrefix(trimmed, startMarkerPrefix):
+			cluster = strings.TrimPrefix(trimmed, startMarkerPrefix)
+			start, end, err := findEntry(lines, cluster)
+			if err != nil {
+				start, end, damaged = i, nextMarker(lines, i+1)-1, err
+			}
+			block = lines[start : end+1]
+			i = end
+		case strings.HasPrefix(trimmed, endMarkerPrefix):
+			// An end marker of a cluster with a start marker was passed over with its
+			// block above; one without is the remains of an entry whose start was lost.
+			cluster = strings.TrimPrefix(trimmed, endMarkerPrefix)
+			if hasMarker(lines, startMarker(cluster)) {
+				continue
+			}
+			_, _, damaged = findEntry(lines, cluster)
+			block = lines[prevMarker(lines, i-1)+1 : i+1]
+		default:
 			continue
 		}
-		start, end, err := findEntry(lines, cluster)
-		if err != nil {
-			start, end = i, nextMarker(lines, i+1)-1
-		}
-		entry := readEntry(cluster, lines[start:end+1], windows)
-		entry.Damaged = err
+		entry := readEntry(cluster, block, windows)
+		entry.Damaged = damaged
 		if entry.Context == contextName {
 			entries = append(entries, entry)
 		}
-		i = end
 	}
 	return entries, nil
+}
+
+// hasMarker reports whether a line is the marker.
+func hasMarker(lines []string, marker string) bool {
+	for _, line := range lines {
+		if strings.TrimSpace(line) == marker {
+			return true
+		}
+	}
+	return false
+}
+
+// isMarker reports whether the line is a start or an end marker of any cluster.
+func isMarker(line string) bool {
+	trimmed := strings.TrimSpace(line)
+	return strings.HasPrefix(trimmed, startMarkerPrefix) || strings.HasPrefix(trimmed, endMarkerPrefix)
 }
 
 // nextMarker returns the index of the first marker line at or after from, or the
 // number of lines when there is none.
 func nextMarker(lines []string, from int) int {
 	for i := from; i < len(lines); i++ {
-		trimmed := strings.TrimSpace(lines[i])
-		if strings.HasPrefix(trimmed, startMarkerPrefix) || strings.HasPrefix(trimmed, endMarkerPrefix) {
+		if isMarker(lines[i]) {
 			return i
 		}
 	}
 	return len(lines)
+}
+
+// prevMarker returns the index of the last marker line at or before from, or -1 when
+// there is none.
+func prevMarker(lines []string, from int) int {
+	for i := from; i >= 0; i-- {
+		if isMarker(lines[i]) {
+			return i
+		}
+	}
+	return -1
 }
 
 // readEntry reads the connect flags out of an entry's ProxyCommand line.
