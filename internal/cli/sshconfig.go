@@ -163,15 +163,16 @@ func (o *sshConfigOptions) removeEntry() error {
 	return nil
 }
 
-// clusterToRemove resolves the entry --remove acts on: --cluster-name, validated, else
-// the entry installed for the context, which it returns as well. With the flag the
-// kubeconfig is not read, so an entry whose context is gone can still be removed. The
-// derived default never counts: it could name another context's entry. The cluster is
-// empty, after a note, when nothing routes the context; an unreadable file or a damaged
-// entry routing the context is an error.
+// clusterToRemove resolves the entry --remove acts on: --cluster-name as written, since
+// Remove matches the marker text and builds no alias, so an entry under a name edited by
+// hand can go too; else the entry installed for the context, which it returns as well.
+// With the flag the kubeconfig is not read, so an entry whose context is gone can still
+// be removed. The derived default never counts: it could name another context's entry.
+// The cluster is empty, after a note, when nothing routes the context; an unreadable
+// file or a damaged entry routing the context is an error.
 func (o *sshConfigOptions) clusterToRemove(path string) (cluster, contextName string, err error) {
 	if o.clusterName != "" {
-		return o.clusterName, "", sshconfig.ValidateClusterName(o.clusterName)
+		return o.clusterName, "", nil
 	}
 	target, err := o.target()
 	if err != nil {

@@ -292,6 +292,30 @@ func TestSSHConfigRemoveReportsADamagedEntry(t *testing.T) {
 	}
 }
 
+// A marker name edited by hand into something that is no label keeps the entry out of
+// the lookup, which asks for --cluster-name; the flag then names the marker as written.
+func TestSSHConfigRemoveDropsAHandEditedName(t *testing.T) {
+	kubeconfig := staticKubeconfig(t)
+	file := filepath.Join(t.TempDir(), "config")
+	edited := "# kubectl-workspace: start My Cluster\nHost *.my-cluster.jk8s\n  ProxyCommand kw connect --stdio --context dev %h\n" +
+		"# kubectl-workspace: end My Cluster\n"
+	if err := os.WriteFile(file, []byte(edited), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := run(t, "ssh-config", "--remove", "--ssh-config-file", file, "--kubeconfig", kubeconfig)
+	if err == nil || !strings.Contains(err.Error(), "cannot be the cluster name in the alias") || !strings.Contains(err.Error(), "--cluster-name") {
+		t.Errorf("error = %v, want the edited name refused as a label and the flag named", err)
+	}
+	stdout, err := run(t, "ssh-config", "--remove", "--ssh-config-file", file, "--cluster-name", "My Cluster")
+	if err != nil || !strings.HasPrefix(stdout, "Removed the entry for Host *.My Cluster.jk8s") {
+		t.Errorf("--cluster-name \"My Cluster\": %q, %v; want the entry removed", stdout, err)
+	}
+	if content, err := os.ReadFile(file); err != nil || len(content) != 0 {
+		t.Errorf("file after --remove = %q, %v; want it empty", content, err)
+	}
+}
+
 // brokenEntry is what is left of an entry for cluster jd routing context dev after its
 // end marker was lost: OpenSSH still honours its Host line.
 const brokenEntry = "# kubectl-workspace: start jd\nHost *.jd.jk8s\n  ProxyCommand kw connect --stdio --context dev %h\n"
@@ -505,12 +529,12 @@ func TestSSHConfigRemoveNeedsTheClusterNameToTellTwoEntriesApart(t *testing.T) {
 		t.Errorf("file after the refused --remove:\n%s\n%v; want both entries kept", content, err)
 	}
 
-	_, err = remove("--cluster-name", "My Cluster")
-	if err == nil || !strings.Contains(err.Error(), `invalid cluster name "My Cluster"`) {
-		t.Errorf("error = %v, want the name refused as no label", err)
+	stdout, err := remove("--cluster-name", "My Cluster")
+	if want := "No entry for cluster \"My Cluster\" in " + file + ".\n"; err != nil || stdout != want {
+		t.Errorf("--cluster-name \"My Cluster\": %q, %v; want %q", stdout, err, want)
 	}
 
-	stdout, err := remove("--cluster-name", "jd")
+	stdout, err = remove("--cluster-name", "jd")
 	if err != nil || !strings.HasPrefix(stdout, "Removed the entry for Host *.jd.jk8s") {
 		t.Errorf("--cluster-name jd: %q, %v; want the jd entry removed", stdout, err)
 	}
