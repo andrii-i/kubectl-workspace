@@ -33,11 +33,7 @@ func Install(path string, e Entry) error {
 	if err := e.Validate(); err != nil {
 		return err
 	}
-	path, err := resolveTarget(path)
-	if err != nil {
-		return err
-	}
-	content, mode, err := read(path)
+	path, content, mode, err := load(path)
 	if err != nil {
 		return err
 	}
@@ -50,11 +46,7 @@ func Install(path string, e Entry) error {
 
 // Installed reports whether the file at path holds an entry for the cluster.
 func Installed(path, cluster string) (bool, error) {
-	path, err := resolveTarget(path)
-	if err != nil {
-		return false, err
-	}
-	content, _, err := read(path)
+	path, content, _, err := load(path)
 	if err != nil {
 		return false, err
 	}
@@ -79,11 +71,7 @@ type InstalledEntry struct {
 // were written with. An entry with broken markers is skipped here; Install and Remove
 // report it when they are asked for that cluster.
 func EntriesForContext(path, contextName string, windows bool) ([]InstalledEntry, error) {
-	path, err := resolveTarget(path)
-	if err != nil {
-		return nil, err
-	}
-	content, _, err := read(path)
+	_, content, _, err := load(path)
 	if err != nil {
 		return nil, err
 	}
@@ -132,11 +120,7 @@ func readEntry(cluster string, block []string, windows bool) InstalledEntry {
 // there was one. Of the blank lines Install put around the entry, one goes with it,
 // so its former neighbours end up separated by at most one.
 func Remove(path, cluster string) (bool, error) {
-	path, err := resolveTarget(path)
-	if err != nil {
-		return false, err
-	}
-	content, mode, err := read(path)
+	path, content, mode, err := load(path)
 	if err != nil {
 		return false, err
 	}
@@ -170,6 +154,18 @@ func lineEnding(content string) string {
 		return "\r\n"
 	}
 	return "\n"
+}
+
+// load follows a symlinked path and reads the file: the path read, its content and
+// its mode.
+func load(path string) (resolved, content string, mode os.FileMode, err error) {
+	if resolved, err = resolveTarget(path); err != nil {
+		return "", "", 0, err
+	}
+	if content, mode, err = read(resolved); err != nil {
+		return "", "", 0, err
+	}
+	return resolved, content, mode, nil
 }
 
 // resolveTarget follows a symlinked configuration file, which dotfiles setups
