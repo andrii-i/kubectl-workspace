@@ -62,7 +62,7 @@ func EntryFor(path, cluster string, windows bool) (InstalledEntry, bool, error) 
 	return readEntry(cluster, lines[start:end+1], windows), true, nil
 }
 
-// InstalledEntry is what EntriesForContext reads back from an entry: its cluster label and
+// InstalledEntry is what EntryFor and EntriesForContext read back from an entry: its cluster name and
 // the context and kubeconfig file its ProxyCommand runs connect with, the kubeconfig
 // empty when connect uses the default lookup.
 type InstalledEntry struct {
@@ -96,7 +96,8 @@ func EntriesForContext(path, contextName string, windows bool) ([]InstalledEntry
 			start, end, err := findEntry(lines, cluster)
 			if err != nil {
 				start, end, damaged = i, nextMarker(lines, i+1)-1, err
-				// With the end marker directly above, the entry's lines sit between the two.
+				// With the entry's own end marker as the nearest marker above, the lines between
+				// the two are the entry's.
 				if p := prevMarker(lines, i-1); p >= 0 && strings.TrimSpace(lines[p]) == endMarker(cluster) {
 					start = p + 1
 				}
@@ -104,8 +105,8 @@ func EntriesForContext(path, contextName string, windows bool) ([]InstalledEntry
 			block = lines[start : end+1]
 			i = end
 		case strings.HasPrefix(trimmed, endMarkerPrefix):
-			// An end marker of a cluster with a start marker was passed over with its
-			// block above; one without is the remains of an entry whose start was lost.
+			// An end marker whose cluster also has a start marker is read from that start
+			// marker; one without is the remains of an entry whose start was lost.
 			cluster = strings.TrimPrefix(trimmed, endMarkerPrefix)
 			if hasMarker(lines, startMarker(cluster)) {
 				continue
@@ -124,7 +125,7 @@ func EntriesForContext(path, contextName string, windows bool) ([]InstalledEntry
 	return entries, nil
 }
 
-// hasMarker reports whether a line is the marker.
+// hasMarker reports whether one of the lines is the marker.
 func hasMarker(lines []string, marker string) bool {
 	for _, line := range lines {
 		if strings.TrimSpace(line) == marker {

@@ -116,7 +116,7 @@ func (o *sshConfigOptions) warnAboutOtherEntries(path string, entry sshconfig.En
 			continue
 		}
 		hint := kubectlWorkspaceCommand("ssh-config", o.kubeconfig, entry.Context, other.Cluster, removeArgs...)
-		warnf(o.streams.Err, "%s also routes context %q under the cluster name %q; drop it with: %s", path,
+		warnf(o.streams.Err, "%s also routes context %q under the cluster name %q; remove it with: %s", path,
 			entry.Context, other.Cluster, hint)
 	}
 }
@@ -150,12 +150,18 @@ func (o *sshConfigOptions) removeEntry() error {
 		return err
 	}
 	cluster, contextName, err := o.clusterToRemove(path)
-	if err != nil || cluster == "" {
+	if err != nil {
 		return err
 	}
+	if cluster == "" {
+		_, _ = fmt.Fprintf(o.streams.Out, "No entry in %s routes context %q; pass --cluster-name for an entry "+
+			"under another name.\n", path, contextName)
+		return nil
+	}
 	if contextName == "" {
-		// With --cluster-name the context comes from the entry itself, so the damage
-		// warning below covers the pasted removal command too; Remove reports a lookup error.
+		// With --cluster-name the kubeconfig is not read, so the context for the damage
+		// warning below comes from the entry itself; a lookup error is left to Remove, which
+		// reports it.
 		if installed, ok, err := sshconfig.EntryFor(path, cluster, runtime.GOOS == goosWindows); err == nil && ok {
 			contextName = installed.Context
 		}
@@ -181,8 +187,8 @@ func (o *sshConfigOptions) removeEntry() error {
 // hand can go too; else the entry installed for the context, which it returns as well.
 // With the flag the kubeconfig is not read, so an entry whose context is gone can still
 // be removed. The derived default never counts: it could name another context's entry.
-// The cluster is empty, after a note, when nothing routes the context; an unreadable
-// file or a damaged entry routing the context is an error.
+// The cluster is empty when nothing routes the context; an unreadable file or a damaged
+// entry routing the context is an error.
 func (o *sshConfigOptions) clusterToRemove(path string) (cluster, contextName string, err error) {
 	if o.clusterName != "" {
 		return o.clusterName, "", nil
@@ -201,10 +207,6 @@ func (o *sshConfigOptions) clusterToRemove(path string) (cluster, contextName st
 	}
 	if cluster, err = pickInstalledCluster(clusters, path, target.Context); err != nil {
 		return "", "", err
-	}
-	if cluster == "" {
-		_, _ = fmt.Fprintf(o.streams.Out, "No entry in %s routes context %q; pass --cluster-name for an entry "+
-			"under another name.\n", path, target.Context)
 	}
 	return cluster, target.Context, nil
 }

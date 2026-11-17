@@ -50,7 +50,7 @@ func executablePath() (string, error) {
 
 // clusterForContext resolves the cluster name in the alias for a context: the
 // --cluster-name flag when given, else the name of the entry already installed for the
-// context and kubeconfig in the SSH configuration file, else the label clusterName
+// context and kubeconfig in the SSH configuration file, else the cluster name clusterName
 // derives from the context name. A file that cannot be read, or a damaged entry routing
 // the context, is an error when strict and counts as no entry otherwise: printing needs
 // no readable file, and a write reports the damage after acting on the file. Two
@@ -129,8 +129,9 @@ func installedClusters(contextName, kubeconfig, path string) ([]string, error) {
 	return clusters, nil
 }
 
-// warnAboutDamage names every damaged entry routing the context: OpenSSH still honours
-// the Host line of a block whose markers are broken, and only a hand can repair it.
+// warnAboutDamage reports each distinct damage among the entries routing the context,
+// once: OpenSSH still honours the Host line of a block whose markers are broken, and
+// only a hand can repair it.
 func warnAboutDamage(w io.Writer, path, contextName string) {
 	entries, _ := sshconfig.EntriesForContext(path, contextName, runtime.GOOS == goosWindows)
 	said := map[string]bool{}
@@ -179,11 +180,11 @@ func routePair(a, b sshconfig.InstalledEntry) (string, string) {
 	return routeOf(a), routeOf(b)
 }
 
-// pinnedKubeconfig returns the kubeconfig path an entry carries for the flag: the
-// --kubeconfig value, else a single-file KUBECONFIG, made absolute because OpenSSH
-// runs the ProxyCommand from its own working directory; empty for the default
-// lookup. list reports a KUBECONFIG with several files, which the entry leaves to
-// the environment.
+// pinnedKubeconfig returns the kubeconfig pin of an entry, the kubeconfig path its
+// ProxyCommand carries, for the flag: the --kubeconfig value, else a single-file
+// KUBECONFIG, made absolute because OpenSSH runs the ProxyCommand from its own working
+// directory; empty for the default lookup. list reports a KUBECONFIG with several
+// files, which the entry leaves to the environment.
 func pinnedKubeconfig(flag string) (path string, list bool, err error) {
 	env := os.Getenv("KUBECONFIG")
 	switch {
@@ -210,7 +211,7 @@ func sshConfigHintArgs(action, sshConfigFile string) []string {
 }
 
 // kubectlWorkspaceCommand renders a command the user can paste into a shell. It
-// always names the cluster: the label is otherwise read from the installed entries,
+// always names the cluster: the cluster name is otherwise read from the installed entries,
 // and the pasted command has to act on the cluster it was built for whatever entries
 // exist by then.
 func kubectlWorkspaceCommand(subcommand, kubeconfig, contextName, cluster string, args ...string) string {
@@ -230,7 +231,7 @@ func kubectlWorkspaceCommand(subcommand, kubeconfig, contextName, cluster string
 	return strings.Join(parts, " ")
 }
 
-// clusterName resolves the alias label: the --cluster-name flag when given, else
+// clusterName resolves the cluster name in the alias: the --cluster-name flag when given, else
 // the context name, or for a context named like an EKS cluster ARN the cluster name
 // inside it, lowercased; either has to be a valid label.
 func clusterName(flag, contextName string) (string, error) {

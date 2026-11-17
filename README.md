@@ -36,7 +36,7 @@ Host *.<cluster>.jk8s
 ```
 
 `<cluster>` is the context name, lowercased. A context named like an EKS cluster ARN
-cannot be a host-name label, so the cluster name inside the ARN serves instead;
+cannot be a host-name label, so the cluster name inside the ARN serves instead, lowercased as well;
 `--cluster-name` picks another name, and later commands read it back from the entry,
 so it is typed once. Running the command again replaces the entry for the same
 cluster name, and `--remove` deletes it. From then on every workspace in the cluster
@@ -107,7 +107,7 @@ Global flags, on every command:
 |------|---------|---------|
 | `--write` | off | Install the entry into the SSH configuration file; without it the entry is printed |
 | `--remove` | off | Remove the entry installed for the context, or the one `--cluster-name` names |
-| `--cluster-name` | from the installed entry, else the context name or the cluster name in an EKS ARN | The `<cluster>` label of the aliases |
+| `--cluster-name` | from the installed entry, else the context name or the cluster name in an EKS ARN | The `<cluster>` part of the aliases |
 | `--ssh-config-file` | `~/.ssh/config` | The SSH configuration file |
 | `--command` | this binary | Path or name of `kubectl-workspace` for the ProxyCommand |
 | `--user` | `jovyan` | SSH user name in the entry |
@@ -120,7 +120,7 @@ Global flags, on every command:
 | Flag | Default | Purpose |
 |------|---------|---------|
 | `-n`, `--namespace` | the context's | Namespace of the workspace |
-| `--cluster-name` | from the installed entry, else the context name or the cluster name in an EKS ARN | The `<cluster>` label of the alias |
+| `--cluster-name` | from the installed entry, else the context name or the cluster name in an EKS ARN | The `<cluster>` part of the alias |
 | `--remote-path` | `/home/jovyan` | Folder to open in the workspace |
 | `--ssh-config-file` | `~/.ssh/config` | The file that must hold the cluster's entry |
 | `--editor` | `vscode` | Editor to open the workspace in: `vscode` or `cursor` |

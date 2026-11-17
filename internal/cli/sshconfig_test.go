@@ -170,7 +170,7 @@ func TestSSHConfigWarnsAboutAnEntryLeftUnderAnotherName(t *testing.T) {
 	}
 	hint := "kubectl workspace ssh-config --remove --ssh-config-file " + file + " --kubeconfig " + kubeconfig +
 		" --context dev --cluster-name dev"
-	want := "kubectl-workspace: " + file + " also routes context \"dev\" under the cluster name \"dev\"; drop it with: " + hint + "\n"
+	want := "kubectl-workspace: " + file + " also routes context \"dev\" under the cluster name \"dev\"; remove it with: " + hint + "\n"
 	if stderr != want {
 		t.Fatalf("stderr = %q\nwant %q", stderr, want)
 	}

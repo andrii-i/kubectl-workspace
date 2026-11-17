@@ -82,10 +82,16 @@ the operator's dependency graph out of this binary.
   single labels; the workspace name may contain dots. The kubeconfig context is not
   in the alias, because EKS context names contain `:` and `/`; the entry carries it,
   and the kubeconfig file when the user chose one. A context named like an EKS
-  cluster ARN gets the cluster name inside the ARN as its label by default, and
-  `open` and `ssh-config` read the label back from the entry installed for the
-  context, preferring one written for the same kubeconfig, so a label chosen by hand
-  is typed once, at the first `ssh-config --write`.
+  cluster ARN gets the cluster name inside the ARN as its cluster name by default, and
+  `open` and `ssh-config` read the cluster name back from the entry installed for the
+  context, preferring one written for the same kubeconfig, so a cluster name chosen by
+  hand is typed once, at the first `ssh-config --write`.
+- Markers pair up or nothing is touched. `Install`, `Remove` and the lookups refuse a
+  file where a cluster's start or end marker is missing, doubled, or encloses another
+  entry's marker, and ask for a repair by hand; a lookup leaves such an entry out, and
+  `--write` and `--remove` report it after acting. A `--write` under a derived cluster
+  name never replaces an entry that routes another context or kubeconfig file; with
+  `--cluster-name` the replacement is deliberate and the changed route is said.
 - The entry goes before the first `Host` or `Match` block and the comment lines directly
   above it, and after everything else above them. A `Host` block runs to the next `Host`
   or `Match`, so an entry placed above a top-level `Include` would capture the included
