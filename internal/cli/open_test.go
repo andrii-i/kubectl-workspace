@@ -265,8 +265,50 @@ func TestOpenPrefersTheEntryWrittenForItsKubeconfig(t *testing.T) {
 			t.Errorf("with %s: stdout = %q, %v; want the alias under %s", kubeconfig, stdout, err, cluster)
 		}
 	}
-	_, err := run(t, "open", "--kubeconfig", staticKubeconfig(t), "--ssh-config-file", configFile, "--print-only", "ws1")
-	if err == nil || !strings.Contains(err.Error(), "first, second") {
-		t.Errorf("with a third kubeconfig: error = %v, want both entries named", err)
+	// An entry pinned to another kubeconfig file routes another cluster, so a third
+	// kubeconfig gets the name derived from its context.
+	stdout, err := run(t, "open", "--kubeconfig", staticKubeconfig(t), "--ssh-config-file", configFile, "--print-only", "ws1")
+	if err != nil || !strings.Contains(stdout, "ssh ws1.team-a.dev.jk8s\n") {
+		t.Errorf("with a third kubeconfig: stdout = %q, %v; want the derived name", stdout, err)
+	}
+
+	// The entry pins the file KUBECONFIG named at --write, so KUBECONFIG finds it again.
+	t.Setenv("KUBECONFIG", second)
+	stdout, err = run(t, "open", "--ssh-config-file", configFile, "--print-only", "ws1")
+	if err != nil || !strings.Contains(stdout, "ssh ws1.team-a.second.jk8s\n") {
+		t.Errorf("with KUBECONFIG=%s: stdout = %q, %v; want the alias under second", second, stdout, err)
+	}
+}
+
+// The entry under the derived name may route another cluster: another context deriving
+// the same name, or the same context name pinned to another kubeconfig file. open
+// refuses it rather than letting the editor connect through it.
+func TestOpenRefusesAnEntryRoutingAnotherCluster(t *testing.T) {
+	kubeconfig, other := staticKubeconfig(t), staticKubeconfig(t)
+	tests := []struct {
+		name      string
+		installed sshconfig.Entry
+		wantRoute string
+	}{
+		{
+			name:      "another context deriving the same name",
+			installed: sshconfig.Entry{Cluster: "dev", Context: testutil.ARNContext, Kubeconfig: kubeconfig},
+			wantRoute: `routes context "` + testutil.ARNContext + `" under the cluster name "dev"`,
+		},
+		{
+			name:      "the same context name pinned to another kubeconfig",
+			installed: sshconfig.Entry{Cluster: "dev", Context: "dev", Kubeconfig: other},
+			wantRoute: `routes context "dev" of kubeconfig ` + other + ` under the cluster name "dev"`,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			configFile := filepath.Join(t.TempDir(), "config")
+			installEntry(t, configFile, tt.installed)
+			_, err := run(t, "open", "--kubeconfig", kubeconfig, "--ssh-config-file", configFile, "--context", "dev", "ws1")
+			if err == nil || !strings.Contains(err.Error(), tt.wantRoute) || !strings.Contains(err.Error(), "--cluster-name") {
+				t.Errorf("error = %v, want the entry's route named and the flag", err)
+			}
+		})
 	}
 }

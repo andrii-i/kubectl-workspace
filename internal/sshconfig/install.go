@@ -44,17 +44,22 @@ func Install(path string, e Entry) error {
 	return write(path, updated, mode)
 }
 
-// Installed reports whether the file at path holds an entry for the cluster.
-func Installed(path, cluster string) (bool, error) {
+// EntryFor returns the entry installed for cluster in the file at path, and whether
+// there is one. windows selects the quoting the entry was written with.
+func EntryFor(path, cluster string, windows bool) (InstalledEntry, bool, error) {
 	path, content, _, err := load(path)
 	if err != nil {
-		return false, err
+		return InstalledEntry{}, false, err
 	}
-	start, _, err := findEntry(splitLines(content), cluster)
+	lines := splitLines(content)
+	start, end, err := findEntry(lines, cluster)
 	if err != nil {
-		return false, fmt.Errorf("%s: %w", path, err)
+		return InstalledEntry{}, false, fmt.Errorf("%s: %w", path, err)
 	}
-	return start >= 0, nil
+	if start < 0 {
+		return InstalledEntry{}, false, nil
+	}
+	return readEntry(cluster, lines[start:end+1], windows), true, nil
 }
 
 // InstalledEntry is what EntriesForContext reads back from an entry: its cluster label and
@@ -277,9 +282,11 @@ func splitLines(s string) []string {
 	return strings.Split(s, "\n")
 }
 
-// findEntry returns the line range of the entry for cluster, or -1 when absent.
+// findEntry returns the line range of the entry for cluster, or -1 when absent. A
+// start marker without its end, an end marker without its start, or a second marker
+// of either kind is an error: the file needs a hand before the tool touches it.
 func findEntry(lines []string, cluster string) (start, end int, err error) {
-	start = -1
+	start, end = -1, -1
 	for i, line := range lines {
 		switch strings.TrimSpace(line) {
 		case startMarker(cluster):
@@ -288,16 +295,19 @@ func findEntry(lines []string, cluster string) (start, end int, err error) {
 			}
 			start = i
 		case endMarker(cluster):
-			if start < 0 {
+			switch {
+			case start < 0:
 				return -1, -1, fmt.Errorf("an end marker for cluster %q precedes its start; remove it by hand", cluster)
+			case end >= 0:
+				return -1, -1, fmt.Errorf("two end markers for cluster %q; remove the entries by hand", cluster)
 			}
-			return start, i, nil
+			end = i
 		}
 	}
-	if start >= 0 {
+	if start >= 0 && end < 0 {
 		return -1, -1, fmt.Errorf("the entry for cluster %q has no end marker; remove it by hand", cluster)
 	}
-	return -1, -1, nil
+	return start, end, nil
 }
 
 // blockKeyword matches the first line of a Host or Match block. ssh_config

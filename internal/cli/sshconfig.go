@@ -80,6 +80,11 @@ func (o *sshConfigOptions) run() error {
 	if err != nil {
 		return err
 	}
+	if o.clusterName == "" {
+		if err := refuseTakeover(path, entry); err != nil {
+			return err
+		}
+	}
 	if err := sshconfig.Install(path, entry); err != nil {
 		return err
 	}
@@ -97,28 +102,28 @@ func (o *sshConfigOptions) run() error {
 	return nil
 }
 
-// removeEntry deletes the cluster's entry. With --cluster-name the kubeconfig is not
-// read, so an entry whose context is gone can still be removed; without it the
-// cluster is resolved as for --write.
-func (o *sshConfigOptions) removeEntry() error {
-	cluster := o.clusterName
-	if cluster == "" {
-		target, err := o.target()
-		if err != nil {
-			return fmt.Errorf("%w; pass --cluster-name to remove the entry without reading the kubeconfig", err)
-		}
-		kubeconfig, _, err := pinnedKubeconfig(o.kubeconfig)
-		if err != nil {
-			return err
-		}
-		if cluster, err = clusterForContext("", target.Context, kubeconfig, o.sshConfigFile); err != nil {
-			return err
-		}
-	} else if err := sshconfig.ValidateClusterName(cluster); err != nil {
+// refuseTakeover keeps a --write under a derived cluster name from replacing an entry
+// that routes another cluster: two EKS clusters named alike derive the same name, and
+// the second write would silently take over the first's entry. With --cluster-name
+// the replacement is the user's choice.
+func refuseTakeover(path string, entry sshconfig.Entry) error {
+	installed, ok, err := sshconfig.EntryFor(path, entry.Cluster, runtime.GOOS == goosWindows)
+	if err != nil || !ok || !routesAnother(installed, entry.Context, entry.Kubeconfig) {
 		return err
 	}
+	theirs, ours := routePair(installed, sshconfig.InstalledEntry{Context: entry.Context, Kubeconfig: entry.Kubeconfig})
+	return fmt.Errorf("%s already routes %s under the cluster name %q; pass --cluster-name to put %s under "+
+		"another name, or --cluster-name %s to replace that entry", path, theirs, entry.Cluster, ours, entry.Cluster)
+}
+
+// removeEntry deletes the entry clusterToRemove names.
+func (o *sshConfigOptions) removeEntry() error {
 	path, err := sshConfigPath(o.sshConfigFile)
 	if err != nil {
+		return err
+	}
+	cluster, err := o.clusterToRemove(path)
+	if err != nil || cluster == "" {
 		return err
 	}
 	removed, err := sshconfig.Remove(path, cluster)
@@ -126,13 +131,40 @@ func (o *sshConfigOptions) removeEntry() error {
 		return err
 	}
 	if !removed {
-		_, _ = fmt.Fprintf(o.streams.Out, "No entry for cluster %q in %s; pass --cluster-name for an entry under another name.\n",
-			cluster, path)
+		_, _ = fmt.Fprintf(o.streams.Out, "No entry for cluster %q in %s.\n", cluster, path)
 		return nil
 	}
 	host := sshconfig.Entry{Cluster: cluster}.HostPattern()
 	_, _ = fmt.Fprintf(o.streams.Out, "Removed the entry for Host %s from %s.\n", host, path)
 	return nil
+}
+
+// clusterToRemove resolves the entry --remove acts on: --cluster-name, validated, else
+// the entry installed for the context. With the flag the kubeconfig is not read, so an
+// entry whose context is gone can still be removed. The derived default never counts:
+// it could name another context's entry. Empty, after a note, when nothing routes the
+// context.
+func (o *sshConfigOptions) clusterToRemove(path string) (string, error) {
+	if o.clusterName != "" {
+		return o.clusterName, sshconfig.ValidateClusterName(o.clusterName)
+	}
+	target, err := o.target()
+	if err != nil {
+		return "", fmt.Errorf("%w; pass --cluster-name to remove the entry without reading the kubeconfig", err)
+	}
+	kubeconfig, _, err := pinnedKubeconfig(o.kubeconfig)
+	if err != nil {
+		return "", err
+	}
+	cluster, err := installedCluster(target.Context, kubeconfig, o.sshConfigFile)
+	if err != nil {
+		return "", err
+	}
+	if cluster == "" {
+		_, _ = fmt.Fprintf(o.streams.Out, "No entry in %s routes context %q; pass --cluster-name for an entry "+
+			"under another name.\n", path, target.Context)
+	}
+	return cluster, nil
 }
 
 // entry builds and validates the entry from the flags and the kubeconfig context.

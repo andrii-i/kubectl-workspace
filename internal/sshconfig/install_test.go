@@ -12,6 +12,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/jupyter-infra/kubectl-workspace/internal/testutil"
 )
@@ -52,8 +53,8 @@ func TestInstallWritesThroughASymlinkedFile(t *testing.T) {
 	if got := readFile(t, target); got != want {
 		t.Errorf("target file =\n%s\nwant\n%s", got, want)
 	}
-	if installed, err := Installed(link, "prod"); err != nil || !installed {
-		t.Errorf("Installed through the link = %v, %v", installed, err)
+	if _, ok, err := EntryFor(link, "prod", false); err != nil || !ok {
+		t.Errorf("EntryFor through the link = %v, %v", ok, err)
 	}
 }
 
@@ -231,29 +232,67 @@ func TestInstallRejectsAPartialEntry(t *testing.T) {
 	}
 }
 
-func TestInstalled(t *testing.T) {
+func TestEntryFor(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config")
-	installed, err := Installed(path, "prod")
-	if err != nil || installed {
-		t.Fatalf("Installed on a missing file = %v, %v; want false, nil", installed, err)
+	if _, ok, err := EntryFor(path, "prod", false); err != nil || ok {
+		t.Fatalf("EntryFor on a missing file = %v, %v; want false, nil", ok, err)
 	}
 	if err := Install(path, testEntry()); err != nil {
 		t.Fatal(err)
 	}
-	installed, err = Installed(path, "prod")
-	if err != nil || !installed {
-		t.Errorf("Installed after Install = %v, %v; want true, nil", installed, err)
+	entry, ok, err := EntryFor(path, "prod", false)
+	if err != nil || !ok || entry.Context != testEntry().Context || entry.Kubeconfig != testEntry().Kubeconfig {
+		t.Errorf("EntryFor after Install = %+v, %v, %v; want the installed entry's context and kubeconfig", entry, ok, err)
 	}
-	installed, err = Installed(path, "staging")
-	if err != nil || installed {
-		t.Errorf("Installed for another cluster = %v, %v; want false, nil", installed, err)
+	if _, ok, err := EntryFor(path, "staging", false); err != nil || ok {
+		t.Errorf("EntryFor for another cluster = %v, %v; want false, nil", ok, err)
 	}
 }
 
-func TestInstalledRejectsAPartialEntry(t *testing.T) {
+func TestEntryForRejectsAPartialEntry(t *testing.T) {
 	path := writeFile(t, endMarker("prod")+"\n")
-	if _, err := Installed(path, "prod"); err == nil || !strings.Contains(err.Error(), "remove it by hand") {
-		t.Errorf("Installed error = %v, want a request to repair the file by hand", err)
+	if _, _, err := EntryFor(path, "prod", false); err == nil || !strings.Contains(err.Error(), "remove it by hand") {
+		t.Errorf("EntryFor error = %v, want a request to repair the file by hand", err)
+	}
+}
+
+// A block pasted twice, or a stray marker after a complete block, is a damaged file:
+// the lookup skips it and the writes refuse it, instead of acting on the first copy.
+func TestDuplicatedMarkersAreDamage(t *testing.T) {
+	rendered := testEntry().Render()
+	tests := map[string]string{
+		"the block twice":            rendered + rendered,
+		"a stray start marker after": rendered + startMarker("prod") + "\n",
+		"a stray end marker after":   rendered + endMarker("prod") + "\n",
+	}
+	for name, content := range tests {
+		t.Run(name, func(t *testing.T) {
+			path := writeFile(t, content)
+			done := make(chan struct{})
+			var entries []InstalledEntry
+			var err error
+			go func() {
+				entries, err = EntriesForContext(path, "prod", false)
+				close(done)
+			}()
+			select {
+			case <-done:
+			case <-time.After(5 * time.Second):
+				t.Fatal("EntriesForContext did not return")
+			}
+			if err != nil || len(entries) != 0 {
+				t.Errorf("entries = %v, %v; want the damaged entry skipped", entries, err)
+			}
+			if _, err := Remove(path, "prod"); err == nil || !strings.Contains(err.Error(), "remove the entries by hand") {
+				t.Errorf("Remove error = %v, want a request to repair the file by hand", err)
+			}
+			if err := Install(path, testEntry()); err == nil || !strings.Contains(err.Error(), "remove the entries by hand") {
+				t.Errorf("Install error = %v, want a request to repair the file by hand", err)
+			}
+			if got := readFile(t, path); got != content {
+				t.Errorf("file changed to\n%s\nwant it untouched", got)
+			}
+		})
 	}
 }
 
@@ -401,5 +440,29 @@ func TestRemoveRejectsAPartialEntry(t *testing.T) {
 	path := writeFile(t, endMarker("prod")+"\n")
 	if _, err := Remove(path, "prod"); err == nil || !strings.Contains(err.Error(), "remove it by hand") {
 		t.Errorf("error = %v, want a request to repair the file by hand", err)
+	}
+}
+
+func TestRemoveWritesThroughASymlinkedFile(t *testing.T) {
+	target := writeFile(t, "Host github.com\n  User git\n")
+	link := filepath.Join(t.TempDir(), "config")
+	testutil.Symlink(t, target, link)
+	if err := Install(link, testEntry()); err != nil {
+		t.Fatal(err)
+	}
+
+	if removed, err := Remove(link, "prod"); err != nil || !removed {
+		t.Fatalf("Remove through the link = %v, %v; want true, nil", removed, err)
+	}
+
+	info, err := os.Lstat(link)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode()&os.ModeSymlink == 0 {
+		t.Error("the symlink was replaced by a regular file")
+	}
+	if got := readFile(t, target); got != "Host github.com\n  User git\n" {
+		t.Errorf("target file =\n%s\nwant the content before Install", got)
 	}
 }

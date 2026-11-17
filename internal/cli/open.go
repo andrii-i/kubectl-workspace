@@ -103,7 +103,7 @@ func (o *openOptions) run(ctx context.Context, workspace string) error {
 		return nil
 	}
 
-	if err := o.checkEntry(cluster, target.Context); err != nil {
+	if err := o.checkEntry(cluster, target.Context, kubeconfig); err != nil {
 		return err
 	}
 	o.logf("resolving the credential for context %q", target.Context)
@@ -121,20 +121,26 @@ func (o *openOptions) run(ctx context.Context, workspace string) error {
 }
 
 // checkEntry fails with the setup command when the cluster has no SSH entry yet,
-// which the editor would otherwise report as an unreachable host.
-func (o *openOptions) checkEntry(cluster, contextName string) error {
+// which the editor would otherwise report as an unreachable host, and refuses an
+// entry under the cluster's name that routes another cluster.
+func (o *openOptions) checkEntry(cluster, contextName, kubeconfig string) error {
 	path, err := sshConfigPath(o.sshConfigFile)
 	if err != nil {
 		return err
 	}
-	installed, err := sshconfig.Installed(path, cluster)
+	installed, ok, err := sshconfig.EntryFor(path, cluster, runtime.GOOS == goosWindows)
 	if err != nil {
 		return err
 	}
-	if !installed {
+	if !ok {
 		return fmt.Errorf("%s has no entry for cluster %q; run: %s", path, cluster,
 			kubectlWorkspaceCommand("ssh-config", o.kubeconfig, contextName, cluster,
 				sshConfigHintArgs(writeFlag, o.sshConfigFile)...))
+	}
+	if routesAnother(installed, contextName, kubeconfig) {
+		theirs, ours := routePair(installed, sshconfig.InstalledEntry{Context: contextName, Kubeconfig: kubeconfig})
+		return fmt.Errorf("%s routes %s under the cluster name %q, not %s; install an entry for it under another "+
+			"name with ssh-config --write --cluster-name", path, theirs, cluster, ours)
 	}
 	return nil
 }

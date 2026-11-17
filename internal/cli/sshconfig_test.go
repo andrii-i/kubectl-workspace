@@ -187,28 +187,113 @@ func TestSSHConfigWarnsAboutAnEntryLeftUnderAnotherName(t *testing.T) {
 	}
 }
 
+// A rerun replaces the cluster's own entry, and an entry routing a context of the
+// same name for another kubeconfig file belongs to another cluster; neither draws
+// the warning, whose hint would remove an entry still in use.
+func TestSSHConfigWarnsAboutNeitherItsOwnEntryNorAnotherKubeconfigs(t *testing.T) {
+	first, second := staticKubeconfig(t), staticKubeconfig(t)
+	file := filepath.Join(t.TempDir(), "config")
+	for cluster, kubeconfig := range map[string]string{"first": first, "second": second} {
+		installEntry(t, file, sshconfig.Entry{Cluster: cluster, Context: "dev", Kubeconfig: kubeconfig})
+	}
+	stdout, stderr, err := runWithStderr(t, "ssh-config", "--write", "--ssh-config-file", file, "--kubeconfig", first,
+		"--command", kwCommand, "--credential-timeout", "15s")
+	if err != nil || stderr != "" || !strings.HasPrefix(stdout, "Installed the entry for Host *.first.jk8s") {
+		t.Errorf("stdout = %q, stderr = %q, %v; want the first entry rewritten and no warning", stdout, stderr, err)
+	}
+	content, err := os.ReadFile(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Count(string(content), "kubectl-workspace: start") != 2 ||
+		!strings.Contains(string(content), "--credential-timeout 15s") {
+		t.Errorf("file after the rerun:\n%s\nwant both entries, the first with the new timeout", content)
+	}
+}
+
+// Printing needs no file: an absent or unreadable one yields the default label, and
+// only --write, which has to read the file, reports it.
 func TestSSHConfigPrintsWithoutReadingTheFile(t *testing.T) {
 	kubeconfig := staticKubeconfig(t)
-	unreadable := filepath.Join(t.TempDir(), "missing", "config")
-	stdout, err := run(t, "ssh-config", "--ssh-config-file", unreadable, "--kubeconfig", kubeconfig, "--command", kwCommand)
+	printEntry := func(file string) (string, error) {
+		return run(t, "ssh-config", "--ssh-config-file", file, "--kubeconfig", kubeconfig, "--command", kwCommand)
+	}
+	dir := t.TempDir()
+	stdout, err := printEntry(filepath.Join(dir, "missing", "config"))
 	if err != nil || !strings.Contains(stdout, "Host *.dev.jk8s\n") {
 		t.Errorf("print mode with an absent file: %q, %v; want the entry printed", stdout, err)
 	}
-}
 
-func TestSSHConfigLowercasesTheContextName(t *testing.T) {
-	kubeconfig := testutil.Kubeconfig{Name: "Dev", Server: "https://127.0.0.1:1", Namespace: "team-a"}.Write(t)
-	stdout, err := run(t, "ssh-config", "--kubeconfig", kubeconfig, "--command", kwCommand)
-	if err != nil || !strings.Contains(stdout, "Host *.dev.jk8s\n") || !strings.Contains(stdout, "--context Dev ") {
-		t.Errorf("stdout = %q, %v; want the lowercased label and the context as named", stdout, err)
+	// A dotfiles link whose target is gone cannot be read, unlike an absent file.
+	link := filepath.Join(dir, "config")
+	testutil.Symlink(t, filepath.Join(dir, "dotfiles", "ssh_config"), link)
+	stdout, err = printEntry(link)
+	if err != nil || !strings.Contains(stdout, "Host *.dev.jk8s\n") {
+		t.Errorf("print mode with a dangling link: %q, %v; want the entry printed", stdout, err)
+	}
+	_, err = run(t, "ssh-config", "--write", "--ssh-config-file", link, "--kubeconfig", kubeconfig, "--command", kwCommand)
+	if err == nil || !strings.Contains(err.Error(), "link to a missing file") {
+		t.Errorf("--write through the dangling link: error = %v, want the link named", err)
 	}
 }
 
-func TestSSHConfigNeedsAClusterNameWhenTheContextIsNoLabel(t *testing.T) {
-	kubeconfig := testutil.Kubeconfig{Name: "Dev_Cluster", Server: "https://127.0.0.1:1", Namespace: "team-a"}.Write(t)
-	_, err := run(t, "ssh-config", "--kubeconfig", kubeconfig, "--command", kwCommand)
-	if err == nil || !strings.Contains(err.Error(), "--cluster-name") {
-		t.Fatalf("error = %v, want a hint to pass --cluster-name", err)
+// Two contexts can derive the same cluster name, as two EKS clusters named alike in
+// different regions do; a --write for the second must not take over the first's entry.
+func TestSSHConfigRefusesToTakeOverAnotherContextsEntry(t *testing.T) {
+	kubeconfig := staticKubeconfig(t) // its contexts dev and arn:...:cluster/dev both derive dev
+	file := filepath.Join(t.TempDir(), "config")
+	write := func(extra ...string) (string, error) {
+		args := append([]string{"ssh-config", "--write", "--ssh-config-file", file, "--kubeconfig", kubeconfig,
+			"--command", kwCommand}, extra...)
+		return run(t, args...)
+	}
+	if _, err := write("--context", "dev"); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.ReadFile(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = write("--context", testutil.ARNContext)
+	if err == nil || !strings.Contains(err.Error(), `routes context "dev" under the cluster name "dev"`) ||
+		!strings.Contains(err.Error(), "--cluster-name") {
+		t.Errorf("error = %v, want the entry's context named and the flag", err)
+	}
+	if after, err := os.ReadFile(file); err != nil || string(after) != string(before) {
+		t.Errorf("file after the refused --write:\n%s\n%v; want it untouched", after, err)
+	}
+
+	// With the name given, the replacement is deliberate; another name adds an entry.
+	stdout, err := write("--context", testutil.ARNContext, "--cluster-name", "dev")
+	if err != nil || !strings.HasPrefix(stdout, "Installed the entry for Host *.dev.jk8s") {
+		t.Errorf("--cluster-name dev: %q, %v; want the entry replaced", stdout, err)
+	}
+	stdout, err = write("--context", "dev", "--cluster-name", "dev-west")
+	if err != nil || !strings.HasPrefix(stdout, "Installed the entry for Host *.dev-west.jk8s") {
+		t.Errorf("--cluster-name dev-west: %q, %v; want a second entry", stdout, err)
+	}
+	content, err := os.ReadFile(file)
+	if err != nil || strings.Count(string(content), "kubectl-workspace: start") != 2 ||
+		!strings.Contains(string(content), "--context "+testutil.ARNContext+" ") {
+		t.Errorf("file:\n%s\n%v; want the ARN entry under dev and a dev-west entry", content, err)
+	}
+}
+
+// --remove without --cluster-name acts only on an entry that routes the context; the
+// derived name could be another context's entry.
+func TestSSHConfigRemoveLeavesAnotherContextsEntryAlone(t *testing.T) {
+	kubeconfig := staticKubeconfig(t)
+	file := filepath.Join(t.TempDir(), "config")
+	installEntry(t, file, sshconfig.Entry{Cluster: "dev", Context: testutil.ARNContext, Kubeconfig: kubeconfig})
+
+	stdout, err := run(t, "ssh-config", "--remove", "--ssh-config-file", file, "--kubeconfig", kubeconfig, "--context", "dev")
+	want := "No entry in " + file + " routes context \"dev\"; pass --cluster-name for an entry under another name.\n"
+	if err != nil || stdout != want {
+		t.Errorf("stdout = %q, %v; want %q", stdout, err, want)
+	}
+	if content, err := os.ReadFile(file); err != nil || !strings.Contains(string(content), "--context "+testutil.ARNContext+" ") {
+		t.Errorf("file:\n%s\n%v; want the other context's entry kept", content, err)
 	}
 }
 
@@ -234,11 +319,19 @@ func TestSSHConfigRemovesTheEntry(t *testing.T) {
 		t.Errorf("file after --remove = %q, %v; want the original content", got, err)
 	}
 
+	stdout, err = run(t, "ssh-config", "--remove", "--ssh-config-file", file, "--kubeconfig", kubeconfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "No entry in " + file + " routes context \"dev\"; pass --cluster-name for an entry under another name.\n"
+	if stdout != want {
+		t.Errorf("stdout = %q, want %q", stdout, want)
+	}
 	stdout, err = run(t, "ssh-config", "--remove", "--ssh-config-file", file, "--cluster-name", "dev")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := "No entry for cluster \"dev\" in " + file + "; pass --cluster-name for an entry under another name.\n"; stdout != want {
+	if want := "No entry for cluster \"dev\" in " + file + ".\n"; stdout != want {
 		t.Errorf("stdout = %q, want %q", stdout, want)
 	}
 
@@ -251,6 +344,43 @@ func TestSSHConfigRemovesTheEntry(t *testing.T) {
 	_, err = run(t, "ssh-config", "--remove", "--ssh-config-file", file, "--kubeconfig", kubeconfig, "--context", "gone")
 	if err == nil || !strings.Contains(err.Error(), "pass --cluster-name to remove the entry without reading the kubeconfig") {
 		t.Errorf("error = %v, want the flag named as the way around a missing context", err)
+	}
+}
+
+// With two entries routing the context, --remove without --cluster-name cannot tell
+// which one to drop; the flag names it and has to be a label itself.
+func TestSSHConfigRemoveNeedsTheClusterNameToTellTwoEntriesApart(t *testing.T) {
+	kubeconfig := staticKubeconfig(t)
+	file := filepath.Join(t.TempDir(), "config")
+	for _, cluster := range []string{"dev", "jd"} {
+		installEntry(t, file, sshconfig.Entry{Cluster: cluster, Context: "dev", Kubeconfig: kubeconfig})
+	}
+	remove := func(extra ...string) (string, error) {
+		args := append([]string{"ssh-config", "--remove", "--ssh-config-file", file, "--kubeconfig", kubeconfig},
+			extra...)
+		return run(t, args...)
+	}
+
+	_, err := remove()
+	if err == nil || !strings.Contains(err.Error(), "dev, jd") || !strings.Contains(err.Error(), "--cluster-name") {
+		t.Errorf("error = %v, want both names and the flag to disambiguate", err)
+	}
+	if content, err := os.ReadFile(file); err != nil || strings.Count(string(content), "kubectl-workspace: start") != 2 {
+		t.Errorf("file after the refused --remove:\n%s\n%v; want both entries kept", content, err)
+	}
+
+	_, err = remove("--cluster-name", "My Cluster")
+	if err == nil || !strings.Contains(err.Error(), `invalid cluster name "My Cluster"`) {
+		t.Errorf("error = %v, want the name refused as no label", err)
+	}
+
+	stdout, err := remove("--cluster-name", "jd")
+	if err != nil || !strings.HasPrefix(stdout, "Removed the entry for Host *.jd.jk8s") {
+		t.Errorf("--cluster-name jd: %q, %v; want the jd entry removed", stdout, err)
+	}
+	stdout, err = remove()
+	if err != nil || !strings.HasPrefix(stdout, "Removed the entry for Host *.dev.jk8s") {
+		t.Errorf("with one entry left: %q, %v; want it found without the flag", stdout, err)
 	}
 }
 
