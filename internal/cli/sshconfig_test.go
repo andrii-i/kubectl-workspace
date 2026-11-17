@@ -340,56 +340,48 @@ func TestSSHConfigNamesDamageOnce(t *testing.T) {
 // end marker was lost: OpenSSH still honours its Host line.
 const brokenEntry = "# kubectl-workspace: start jd\nHost *.jd.jk8s\n  ProxyCommand kw connect --stdio --context dev %h\n"
 
-// --write under a free name and --remove of the intact entry both succeed next to a
-// damaged entry routing the same context, and both say it is still there.
+// --write under a free name and --remove of the intact entry, by context or by the name
+// the pasted hint carries, all succeed next to a damaged entry routing the same context,
+// and all say it is still there.
 func TestSSHConfigSaysWhenADamagedEntryRoutesTheContext(t *testing.T) {
 	kubeconfig := staticKubeconfig(t)
-	file := filepath.Join(t.TempDir(), "config")
-	if err := os.WriteFile(file, []byte(brokenEntry), 0o600); err != nil {
-		t.Fatal(err)
-	}
 	wantDamage := func(t *testing.T, action, stderr string) {
 		t.Helper()
 		if !strings.Contains(stderr, `the entry for cluster "jd" has no end marker`) || !strings.Contains(stderr, "by hand") {
 			t.Errorf("%s: stderr = %q; want the damaged jd entry named with a request to repair it by hand", action, stderr)
 		}
 	}
+	for name, removeArgs := range map[string][]string{
+		"by context":  {"--kubeconfig", kubeconfig},
+		"by its name": {"--cluster-name", "dev"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			file := filepath.Join(t.TempDir(), "config")
+			if err := os.WriteFile(file, []byte(brokenEntry), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			stdout, stderr, err := runWithStderr(t, "ssh-config", "--write", "--ssh-config-file", file, "--kubeconfig", kubeconfig,
+				"--command", kwCommand)
+			if err != nil || !strings.HasPrefix(stdout, "Installed the entry for Host *.dev.jk8s") {
+				t.Fatalf("--write: stdout = %q, %v; want the dev entry installed", stdout, err)
+			}
+			wantDamage(t, "--write", stderr)
 
-	stdout, stderr, err := runWithStderr(t, "ssh-config", "--write", "--ssh-config-file", file, "--kubeconfig", kubeconfig,
-		"--command", kwCommand)
-	if err != nil || !strings.HasPrefix(stdout, "Installed the entry for Host *.dev.jk8s") {
-		t.Fatalf("--write: stdout = %q, %v; want the dev entry installed", stdout, err)
+			args := append([]string{"ssh-config", "--remove", "--ssh-config-file", file}, removeArgs...)
+			stdout, stderr, err = runWithStderr(t, args...)
+			if err != nil || !strings.HasPrefix(stdout, "Removed the entry for Host *.dev.jk8s") {
+				t.Fatalf("--remove: stdout = %q, %v; want the dev entry removed", stdout, err)
+			}
+			wantDamage(t, "--remove", stderr)
+		})
 	}
-	wantDamage(t, "--write", stderr)
-
-	stdout, stderr, err = runWithStderr(t, "ssh-config", "--remove", "--ssh-config-file", file, "--kubeconfig", kubeconfig)
-	if err != nil || !strings.HasPrefix(stdout, "Removed the entry for Host *.dev.jk8s") {
-		t.Fatalf("--remove: stdout = %q, %v; want the dev entry removed", stdout, err)
-	}
-	wantDamage(t, "--remove", stderr)
 }
 
 // Replacing an entry can change what its alias reaches: the context, or the kubeconfig
 // file ssh resolves it in when the pin is added or dropped. The rerun says so.
 func TestSSHConfigWarnsWhenTheReplacementChangesTheRoute(t *testing.T) {
 	kubeconfig := staticKubeconfig(t)
-	home, err := os.UserHomeDir()
-	if err != nil {
-		t.Fatal(err)
-	}
-	// The default kubeconfig lives in the test package's own home directory.
-	defaultKubeconfig := filepath.Join(home, ".kube", "config")
-	if err := os.MkdirAll(filepath.Dir(defaultKubeconfig), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	content, err := os.ReadFile(kubeconfig)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(defaultKubeconfig, content, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = os.RemoveAll(filepath.Dir(defaultKubeconfig)) })
+	useAsDefaultKubeconfig(t, kubeconfig)
 	file := filepath.Join(t.TempDir(), "config")
 	write := func(extra ...string) (string, error) {
 		_, stderr, err := runWithStderr(t, append([]string{"ssh-config", "--write", "--ssh-config-file", file,

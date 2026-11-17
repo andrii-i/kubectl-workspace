@@ -153,6 +153,13 @@ func (o *sshConfigOptions) removeEntry() error {
 	if err != nil || cluster == "" {
 		return err
 	}
+	if contextName == "" {
+		// With --cluster-name the context comes from the entry itself, so the damage
+		// warning below covers the pasted removal command too; Remove reports a lookup error.
+		if installed, ok, err := sshconfig.EntryFor(path, cluster, runtime.GOOS == goosWindows); err == nil && ok {
+			contextName = installed.Context
+		}
+	}
 	removed, err := sshconfig.Remove(path, cluster)
 	if err != nil {
 		return err
