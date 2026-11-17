@@ -316,6 +316,26 @@ func TestSSHConfigRemoveDropsAHandEditedName(t *testing.T) {
 	}
 }
 
+// A block pasted twice yields one damaged entry per start marker; the damage is said once.
+func TestSSHConfigNamesDamageOnce(t *testing.T) {
+	kubeconfig := staticKubeconfig(t)
+	file := filepath.Join(t.TempDir(), "config")
+	installEntry(t, file, sshconfig.Entry{Cluster: "dev", Context: "dev", Kubeconfig: kubeconfig})
+	content, err := os.ReadFile(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(file, append(content, content...), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	_, stderr, err := runWithStderr(t, "ssh-config", "--write", "--ssh-config-file", file, "--kubeconfig", kubeconfig,
+		"--command", kwCommand, "--cluster-name", "other")
+	if err != nil || strings.Count(stderr, "two start markers") != 1 {
+		t.Errorf("stderr = %q, %v; want the duplicated block named once", stderr, err)
+	}
+}
+
 // brokenEntry is what is left of an entry for cluster jd routing context dev after its
 // end marker was lost: OpenSSH still honours its Host line.
 const brokenEntry = "# kubectl-workspace: start jd\nHost *.jd.jk8s\n  ProxyCommand kw connect --stdio --context dev %h\n"

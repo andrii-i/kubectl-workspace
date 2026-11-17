@@ -133,10 +133,13 @@ func installedClusters(contextName, kubeconfig, path string) ([]string, error) {
 // the Host line of a block whose markers are broken, and only a hand can repair it.
 func warnAboutDamage(w io.Writer, path, contextName string) {
 	entries, _ := sshconfig.EntriesForContext(path, contextName, runtime.GOOS == goosWindows)
+	said := map[string]bool{}
 	for _, e := range entries {
-		if e.Damaged != nil {
-			warnf(w, "%s: %v", path, e.Damaged)
+		if e.Damaged == nil || said[e.Damaged.Error()] {
+			continue
 		}
+		said[e.Damaged.Error()] = true
+		warnf(w, "%s: %v", path, e.Damaged)
 	}
 }
 
