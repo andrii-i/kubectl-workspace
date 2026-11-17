@@ -49,9 +49,9 @@ the context name or the cluster name inside a context named like an EKS cluster 
 			return o.run()
 		},
 	}
-	cmd.Flags().BoolVar(&o.write, "write", false, "install the entry into the SSH configuration file")
-	cmd.Flags().BoolVar(&o.remove, "remove", false, "remove the cluster's entry from the SSH configuration file")
-	cmd.MarkFlagsMutuallyExclusive("write", "remove")
+	cmd.Flags().BoolVar(&o.write, writeFlag, false, "install the entry into the SSH configuration file")
+	cmd.Flags().BoolVar(&o.remove, removeFlag, false, "remove the cluster's entry from the SSH configuration file")
+	cmd.MarkFlagsMutuallyExclusive(writeFlag, removeFlag)
 	cmd.Flags().StringVar(&o.clusterName, "cluster-name", "", clusterNameHelp)
 	cmd.Flags().StringVar(&o.sshConfigFile, "ssh-config-file", "", sshConfigFileHelp)
 	cmd.Flags().StringVar(&o.command, "command", "",
@@ -84,10 +84,7 @@ func (o *sshConfigOptions) run() error {
 		return err
 	}
 	_, _ = fmt.Fprintf(o.streams.Out, "Installed the entry for Host %s in %s.\n", entry.HostPattern(), path)
-	removeArgs := []string{"--remove"}
-	if o.sshConfigFile != "" {
-		removeArgs = append(removeArgs, "--ssh-config-file", o.sshConfigFile)
-	}
+	removeArgs := sshConfigHintArgs(removeFlag, o.sshConfigFile)
 	for _, other := range installedClusters(entry.Context, entry.Kubeconfig, o.sshConfigFile) {
 		if other != entry.Cluster {
 			warnf(o.streams.Err, "%s also routes context %q under the cluster name %q; drop it with: %s", path,

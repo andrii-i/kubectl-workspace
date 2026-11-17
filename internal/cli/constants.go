@@ -16,8 +16,12 @@ const goosWindows = "windows"
 // allowPlaintextFlag is the opt-in connect takes and ssh-config writes into the entry.
 const allowPlaintextFlag = "insecure-allow-plaintext"
 
-// writeFlag is ssh-config's install flag, as the hints spell it.
-const writeFlag = "--write"
+// writeFlag and removeFlag are ssh-config's install and removal flags, registered and
+// spelled in the hints from here.
+const (
+	writeFlag  = "write"
+	removeFlag = "remove"
+)
 
 // Help texts of the flags that connect, ssh-config and open share.
 const (

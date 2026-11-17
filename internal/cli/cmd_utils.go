@@ -117,6 +117,17 @@ func pinnedKubeconfig(flag string) (path string, list bool, err error) {
 	return path, list, err
 }
 
+// sshConfigHintArgs returns the flags of a pasted ssh-config hint: the action flag,
+// and the configuration file when it is not the default, so the pasted command acts
+// on the same file.
+func sshConfigHintArgs(action, sshConfigFile string) []string {
+	args := []string{"--" + action}
+	if sshConfigFile != "" {
+		args = append(args, "--ssh-config-file", sshConfigFile)
+	}
+	return args
+}
+
 // kubectlWorkspaceCommand renders a command the user can paste into a shell. It
 // always names the cluster: the label is otherwise read from the installed entries,
 // and the pasted command has to act on the cluster it was built for whatever entries
