@@ -124,12 +124,34 @@ func TestSSHConfigReusesTheLabelOfTheInstalledEntry(t *testing.T) {
 	}
 }
 
-func TestSSHConfigLowercasesAnUppercaseEKSClusterName(t *testing.T) {
-	arn := "arn:aws:eks:us-west-2:123456789012:cluster/MyCluster"
-	kubeconfig := testutil.Kubeconfig{Name: arn, Server: "https://127.0.0.1:1", Namespace: "team-a"}.Write(t)
-	stdout, err := run(t, "ssh-config", "--kubeconfig", kubeconfig, "--command", kwCommand)
-	if err != nil || !strings.Contains(stdout, "Host *.mycluster.jk8s\n") {
-		t.Errorf("stdout = %q, %v; want the lowercased cluster name, as OpenSSH matches hosts", stdout, err)
+// The cluster name in the alias comes from the context: lowercased, as OpenSSH matches
+// hosts, or for an EKS cluster ARN the cluster name inside it; a context that is no
+// label even then needs the flag.
+func TestSSHConfigDerivesTheClusterNameFromTheContext(t *testing.T) {
+	tests := []struct {
+		name, context, wantHost, wantErr string
+	}{
+		{name: "a plain context", context: "dev", wantHost: "Host *.dev.jk8s\n"},
+		{name: "a mixed-case context", context: "Dev", wantHost: "Host *.dev.jk8s\n"},
+		{name: "an EKS cluster ARN", context: "arn:aws:eks:us-west-2:123456789012:cluster/MyCluster",
+			wantHost: "Host *.mycluster.jk8s\n"},
+		{name: "a context that is no label", context: "Dev_Cluster", wantErr: "--cluster-name"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			kubeconfig := testutil.Kubeconfig{Name: tt.context, Server: "https://127.0.0.1:1", Namespace: "team-a"}.Write(t)
+			stdout, err := run(t, "ssh-config", "--kubeconfig", kubeconfig, "--command", kwCommand)
+			if tt.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+					t.Fatalf("error = %v, want a hint to pass %s", err, tt.wantErr)
+				}
+				return
+			}
+			// The context keeps its case in the ProxyCommand; only the alias label is lowercased.
+			if err != nil || !strings.Contains(stdout, tt.wantHost) || !strings.Contains(stdout, "--context "+tt.context+" ") {
+				t.Errorf("stdout = %q, %v; want %q and the context as named", stdout, err, tt.wantHost)
+			}
+		})
 	}
 }
 

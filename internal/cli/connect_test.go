@@ -172,7 +172,7 @@ func TestConnectFailsFastWhenTheCredentialNeedsASignIn(t *testing.T) {
 			wantSlowHint: slowHint + "--kubeconfig " + kubeconfig + " --context dev --cluster-name dev",
 		},
 		{
-			name:         "EKS ARN context needs the cluster name",
+			name:         "EKS ARN context derives the cluster name",
 			args:         []string{"--context", testutil.ARNContext},
 			wantOpenHint: openHint + testutil.ARNContext + " --cluster-name dev",
 			wantSlowHint: slowHint + "--kubeconfig " + kubeconfig + " --context " + testutil.ARNContext + " --cluster-name dev",
