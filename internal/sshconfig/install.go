@@ -173,17 +173,25 @@ func readEntry(cluster string, block []string, windows bool) InstalledEntry {
 			continue
 		}
 		args := SplitArgs(rest, windows)
-		for i := 0; i+1 < len(args); i++ {
-			switch args[i] {
-			case "--context":
-				entry.Context = args[i+1]
-			case "--kubeconfig":
-				entry.Kubeconfig = args[i+1]
-			}
+		for i := 0; i < len(args); i++ {
+			entry.Context = flagValue(args, i, "--context", entry.Context)
+			entry.Kubeconfig = flagValue(args, i, "--kubeconfig", entry.Kubeconfig)
 		}
 		break
 	}
 	return entry
+}
+
+// flagValue returns the value of flag at position i of args, in the "--flag value" form
+// the plugin writes or the "--flag=value" form a hand edit may use, else current.
+func flagValue(args []string, i int, flag, current string) string {
+	if args[i] == flag && i+1 < len(args) {
+		return args[i+1]
+	}
+	if value, ok := strings.CutPrefix(args[i], flag+"="); ok {
+		return value
+	}
+	return current
 }
 
 // Remove deletes the entry for cluster from the file at path and reports whether

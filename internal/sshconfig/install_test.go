@@ -248,6 +248,16 @@ func TestEntryFor(t *testing.T) {
 	}
 }
 
+// A hand edit may write the flags as --flag=value; the entry reads back the same.
+func TestEntryForReadsTheEqualsForm(t *testing.T) {
+	path := writeFile(t, startMarker("prod")+"\nHost *.prod.jk8s\n  ProxyCommand kw connect --stdio --kubeconfig=/k --context=prod %h\n"+
+		endMarker("prod")+"\n")
+	entry, ok, err := EntryFor(path, "prod", false)
+	if err != nil || !ok || entry.Context != "prod" || entry.Kubeconfig != "/k" {
+		t.Errorf("EntryFor = %+v, %v, %v; want context prod and kubeconfig /k", entry, ok, err)
+	}
+}
+
 func TestEntryForRejectsAPartialEntry(t *testing.T) {
 	path := writeFile(t, endMarker("prod")+"\n")
 	if _, _, err := EntryFor(path, "prod", false); err == nil || !strings.Contains(err.Error(), "remove it by hand") {
