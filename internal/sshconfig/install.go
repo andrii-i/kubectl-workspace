@@ -96,6 +96,10 @@ func EntriesForContext(path, contextName string, windows bool) ([]InstalledEntry
 			start, end, err := findEntry(lines, cluster)
 			if err != nil {
 				start, end, damaged = i, nextMarker(lines, i+1)-1, err
+				// With the end marker directly above, the entry's lines sit between the two.
+				if p := prevMarker(lines, i-1); p >= 0 && strings.TrimSpace(lines[p]) == endMarker(cluster) {
+					start = p + 1
+				}
 			}
 			block = lines[start : end+1]
 			i = end

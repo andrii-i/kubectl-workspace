@@ -259,11 +259,14 @@ func TestEntryForRejectsAPartialEntry(t *testing.T) {
 // the lookup marks it and the writes refuse it, instead of acting on the first copy.
 func TestDuplicatedMarkersAreDamage(t *testing.T) {
 	rendered := testEntry().Render()
+	lines := strings.Split(strings.TrimSuffix(rendered, "\n"), "\n")
+	lines[0], lines[len(lines)-1] = lines[len(lines)-1], lines[0]
 	tests := map[string]string{
 		"the block twice":            rendered + rendered,
 		"a stray start marker after": rendered + startMarker("prod") + "\n",
 		"a stray end marker after":   rendered + endMarker("prod") + "\n",
 		"the start marker lost":      strings.TrimPrefix(rendered, startMarker("prod")+"\n"),
+		"the markers swapped":        strings.Join(lines, "\n") + "\n",
 	}
 	for name, content := range tests {
 		t.Run(name, func(t *testing.T) {
