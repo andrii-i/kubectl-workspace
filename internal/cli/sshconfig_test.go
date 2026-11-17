@@ -254,27 +254,61 @@ func TestSSHConfigPrintsWithoutReadingTheFile(t *testing.T) {
 	}
 }
 
-// A stray marker makes the entry damage that --remove reports instead of claiming that
-// nothing routes the context; the file is left for a hand to repair.
+// A stray or lost marker makes the entry damage that --remove reports instead of
+// claiming that nothing routes the context; the file is left for a hand to repair.
 func TestSSHConfigRemoveReportsADamagedEntry(t *testing.T) {
 	kubeconfig := staticKubeconfig(t)
-	file := filepath.Join(t.TempDir(), "config")
-	installEntry(t, file, sshconfig.Entry{Cluster: "dev", Context: "dev", Kubeconfig: kubeconfig})
-	content, err := os.ReadFile(file)
-	if err != nil {
-		t.Fatal(err)
+	tests := []struct {
+		name    string
+		damage  func(content string) string
+		wantErr string
+	}{
+		{name: "a stray start marker", wantErr: "two start markers",
+			damage: func(content string) string { return content + "# kubectl-workspace: start dev\n" }},
+		{name: "the start marker lost", wantErr: "precedes its start",
+			damage: func(content string) string { return strings.TrimPrefix(content, "# kubectl-workspace: start dev\n") }},
 	}
-	content = append(content, "# kubectl-workspace: start dev\n"...)
-	if err := os.WriteFile(file, content, 0o600); err != nil {
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			file := filepath.Join(t.TempDir(), "config")
+			installEntry(t, file, sshconfig.Entry{Cluster: "dev", Context: "dev", Kubeconfig: kubeconfig})
+			content, err := os.ReadFile(file)
+			if err != nil {
+				t.Fatal(err)
+			}
+			damaged := tt.damage(string(content))
+			if err := os.WriteFile(file, []byte(damaged), 0o600); err != nil {
+				t.Fatal(err)
+			}
+
+			_, err = run(t, "ssh-config", "--remove", "--ssh-config-file", file, "--kubeconfig", kubeconfig)
+			if err == nil || !strings.Contains(err.Error(), tt.wantErr) || !strings.Contains(err.Error(), "by hand") {
+				t.Errorf("error = %v, want %q and a request to repair the file by hand", err, tt.wantErr)
+			}
+			if after, err := os.ReadFile(file); err != nil || string(after) != damaged {
+				t.Errorf("file after the refused --remove:\n%s\n%v; want it untouched", after, err)
+			}
+		})
+	}
+}
+
+// --write under a free name succeeds next to a damaged entry routing the same context,
+// and says so, since OpenSSH still honours what is left of that entry.
+func TestSSHConfigWriteWarnsAboutADamagedEntry(t *testing.T) {
+	kubeconfig := staticKubeconfig(t)
+	file := filepath.Join(t.TempDir(), "config")
+	broken := "# kubectl-workspace: start jd\nHost *.jd.jk8s\n  ProxyCommand " + kwCommand + " connect --stdio --context dev %h\n"
+	if err := os.WriteFile(file, []byte(broken), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
-	_, err = run(t, "ssh-config", "--remove", "--ssh-config-file", file, "--kubeconfig", kubeconfig)
-	if err == nil || !strings.Contains(err.Error(), "two start markers") || !strings.Contains(err.Error(), "remove the entries by hand") {
-		t.Errorf("error = %v, want the damage named and a request to repair the file by hand", err)
+	stdout, stderr, err := runWithStderr(t, "ssh-config", "--write", "--ssh-config-file", file, "--kubeconfig", kubeconfig,
+		"--command", kwCommand)
+	if err != nil || !strings.HasPrefix(stdout, "Installed the entry for Host *.dev.jk8s") {
+		t.Fatalf("stdout = %q, %v; want the dev entry installed", stdout, err)
 	}
-	if after, err := os.ReadFile(file); err != nil || string(after) != string(content) {
-		t.Errorf("file after the refused --remove:\n%s\n%v; want it untouched", after, err)
+	if !strings.Contains(stderr, `the entry for cluster "jd" has no end marker`) || !strings.Contains(stderr, "by hand") {
+		t.Errorf("stderr = %q; want the damaged jd entry named with a request to repair it by hand", stderr)
 	}
 }
 

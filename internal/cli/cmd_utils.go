@@ -51,7 +51,7 @@ func executablePath() (string, error) {
 // --cluster-name flag when given, else the name of the entry already installed for the
 // context and kubeconfig in the SSH configuration file, else the label clusterName
 // derives from the context name. A file that cannot be read, or a damaged entry, counts
-// as holding no entry here; the command that needs the file reports it.
+// as holding no entry here; --write and --remove, which act on the file, report it.
 func clusterForContext(flag, contextName, kubeconfig, sshConfigFile string) (string, error) {
 	if flag != "" {
 		return clusterName(flag, contextName)

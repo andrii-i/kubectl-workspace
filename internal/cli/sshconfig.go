@@ -98,13 +98,17 @@ func (o *sshConfigOptions) run() error {
 }
 
 // warnAboutOtherEntries names every other intact entry that routes the same cluster as
-// the one just installed, with the command that removes it: the alias under the old
-// name still works, and a later lookup would find two entries.
+// the one just installed, with the command that removes it, since the alias under the
+// old name still works, and every damaged entry routing the context, which needs a hand.
 func (o *sshConfigOptions) warnAboutOtherEntries(path string, entry sshconfig.Entry) {
 	removeArgs := sshConfigHintArgs(removeFlag, o.sshConfigFile)
 	others, _ := sshconfig.EntriesForContext(path, entry.Context, runtime.GOOS == goosWindows)
 	for _, other := range others {
-		if other.Cluster == entry.Cluster || other.Damaged != nil || routesAnother(other, entry.Context, entry.Kubeconfig) {
+		if other.Damaged != nil {
+			warnf(o.streams.Err, "%s: %v", path, other.Damaged)
+			continue
+		}
+		if other.Cluster == entry.Cluster || routesAnother(other, entry.Context, entry.Kubeconfig) {
 			continue
 		}
 		hint := kubectlWorkspaceCommand("ssh-config", o.kubeconfig, entry.Context, other.Cluster, removeArgs...)
