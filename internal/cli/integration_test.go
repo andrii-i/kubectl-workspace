@@ -61,6 +61,12 @@ func runWithOwnHome(m *testing.M) int {
 			return 1
 		}
 	}
+	// A developer's KUBECONFIG would point the default lookup elsewhere; tests that
+	// need the variable set it themselves.
+	if err := os.Unsetenv("KUBECONFIG"); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
 	clientcmd.RecommendedHomeFile = filepath.Join(home, clientcmd.RecommendedHomeDir, clientcmd.RecommendedFileName)
 	return m.Run()
 }
