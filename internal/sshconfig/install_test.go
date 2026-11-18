@@ -248,13 +248,20 @@ func TestEntryFor(t *testing.T) {
 	}
 }
 
-// A hand edit may write the flags as --flag=value; the entry reads back the same.
-func TestEntryForReadsTheEqualsForm(t *testing.T) {
-	path := writeFile(t, startMarker("prod")+"\nHost *.prod.jk8s\n  ProxyCommand kw connect --stdio --kubeconfig=/k --context=prod %h\n"+
-		endMarker("prod")+"\n")
-	entry, ok, err := EntryFor(path, "prod", false)
-	if err != nil || !ok || entry.Context != "prod" || entry.Kubeconfig != "/k" {
-		t.Errorf("EntryFor = %+v, %v, %v; want context prod and kubeconfig /k", entry, ok, err)
+// A hand edit may spell the keyword or the flags the other ways ssh accepts; the entry
+// reads back the same.
+func TestEntryForReadsHandEditedSpellings(t *testing.T) {
+	for _, line := range []string{
+		"ProxyCommand kw connect --stdio --kubeconfig=/k --context=prod %h",
+		"proxycommand kw connect --stdio --kubeconfig /k --context prod %h",
+		"ProxyCommand=kw connect --stdio --kubeconfig /k --context prod %h",
+		"ProxyCommand = kw connect --stdio --kubeconfig /k --context prod %h",
+	} {
+		path := writeFile(t, startMarker("prod")+"\nHost *.prod.jk8s\n  "+line+"\n"+endMarker("prod")+"\n")
+		entry, ok, err := EntryFor(path, "prod", false)
+		if err != nil || !ok || entry.Context != "prod" || entry.Kubeconfig != "/k" {
+			t.Errorf("%q: EntryFor = %+v, %v, %v; want context prod and kubeconfig /k", line, entry, ok, err)
+		}
 	}
 }
 

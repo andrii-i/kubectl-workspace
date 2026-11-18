@@ -163,16 +163,22 @@ func prevMarker(lines []string, from int) int {
 	return -1
 }
 
-// readEntry reads the connect flags out of an entry's ProxyCommand line. OpenSSH keeps
-// the first value it meets for an option, so the first ProxyCommand line is the entry's.
+// proxyCommandKeyword matches the ProxyCommand keyword as ssh_config reads it: in any
+// letter case, followed by whitespace or `=`.
+var proxyCommandKeyword = regexp.MustCompile(`(?i)^proxycommand(\s+|\s*=\s*)`)
+
+// readEntry reads the connect flags out of an entry's ProxyCommand line, however the
+// keyword is spelled. OpenSSH keeps the first value it meets for an option, so the first
+// ProxyCommand line is the entry's.
 func readEntry(cluster string, block []string, windows bool) InstalledEntry {
 	entry := InstalledEntry{Cluster: cluster}
 	for _, line := range block {
-		rest, ok := strings.CutPrefix(strings.TrimSpace(line), "ProxyCommand ")
-		if !ok {
+		trimmed := strings.TrimSpace(line)
+		keyword := proxyCommandKeyword.FindStringIndex(trimmed)
+		if keyword == nil {
 			continue
 		}
-		args := SplitArgs(rest, windows)
+		args := SplitArgs(trimmed[keyword[1]:], windows)
 		for i := 0; i < len(args); i++ {
 			entry.Context = flagValue(args, i, "--context", entry.Context)
 			entry.Kubeconfig = flagValue(args, i, "--kubeconfig", entry.Kubeconfig)
