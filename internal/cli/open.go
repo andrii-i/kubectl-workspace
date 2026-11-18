@@ -100,17 +100,13 @@ func (o *openOptions) run(ctx context.Context, workspace string) error {
 	}
 	link := editorLink(o.editor, alias, o.remotePath)
 
+	if err := o.checkEntry(cluster, target.Context, kubeconfig); err != nil {
+		return err
+	}
 	if o.printOnly {
-		if err := o.refuseOtherClustersEntry(cluster, target.Context, kubeconfig); err != nil {
-			return err
-		}
 		_, _ = fmt.Fprintln(o.streams.Out, link)
 		_, _ = fmt.Fprintf(o.streams.Out, "ssh %s\n", alias)
 		return nil
-	}
-
-	if err := o.checkEntry(cluster, target.Context, kubeconfig); err != nil {
-		return err
 	}
 	o.logf("resolving the credential for context %q", target.Context)
 	credential := kube.CredentialOptions{Interactive: true, Stdin: o.streams.In, Stderr: o.streams.Err}
@@ -128,37 +124,34 @@ func (o *openOptions) run(ctx context.Context, workspace string) error {
 
 // checkEntry fails with the setup command when the cluster has no SSH entry yet, which
 // the editor would otherwise report as an unreachable host, and refuses an entry under
-// the cluster's name that routes another cluster or that the plugin cannot read.
+// the cluster's name that routes another cluster or that the plugin cannot read. In
+// print mode a missing file, a missing entry or damage is tolerated, since printing
+// needs no file; the refusal stays, since the printed alias would land in the other
+// cluster.
 func (o *openOptions) checkEntry(cluster, contextName, kubeconfig string) error {
 	path, err := sshConfigPath(o.sshConfigFile)
 	if err != nil {
-		return err
+		return o.unlessPrinting(err)
 	}
 	installed, ok, err := sshconfig.EntryFor(path, cluster, runtime.GOOS == goosWindows)
 	if err != nil {
-		return err
+		return o.unlessPrinting(err)
 	}
 	if !ok {
-		return fmt.Errorf("%s has no entry for cluster %q; run: %s", path, cluster,
+		return o.unlessPrinting(fmt.Errorf("%s has no entry for cluster %q; run: %s", path, cluster,
 			kubectlWorkspaceCommand("ssh-config", o.kubeconfig, contextName, cluster,
-				sshConfigHintArgs(writeFlag, o.sshConfigFile)...))
+				sshConfigHintArgs(writeFlag, o.sshConfigFile)...)))
 	}
 	return o.refuseOtherCluster(path, installed, cluster, contextName, kubeconfig)
 }
 
-// refuseOtherClustersEntry is checkEntry for --print-only: a missing file, a missing
-// entry or damage is tolerated, since printing needs no file, but an entry under the
-// cluster's name that routes another cluster would make the printed alias land there.
-func (o *openOptions) refuseOtherClustersEntry(cluster, contextName, kubeconfig string) error {
-	path, err := sshConfigPath(o.sshConfigFile)
-	if err != nil {
+// unlessPrinting returns err, or nil when the command only prints and needs nothing
+// from the file.
+func (o *openOptions) unlessPrinting(err error) error {
+	if o.printOnly {
 		return nil
 	}
-	installed, ok, err := sshconfig.EntryFor(path, cluster, runtime.GOOS == goosWindows)
-	if err != nil || !ok {
-		return nil
-	}
-	return o.refuseOtherCluster(path, installed, cluster, contextName, kubeconfig)
+	return err
 }
 
 // refuseOtherCluster refuses the installed entry under the cluster's name when it routes
