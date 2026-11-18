@@ -30,8 +30,8 @@ type openOptions struct {
 }
 
 // editorFor resolves an --editor value to the editor's display name. Each value
-// is also the editor's URL scheme: a fork of VS Code that ships Remote-SSH opens VS
-// Code's link under its own scheme.
+// is also the editor's URL scheme: Cursor and Kiro open VS Code's link under their
+// own schemes.
 func editorFor(value string) (string, error) {
 	switch value {
 	case editorVSCode:
