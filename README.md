@@ -29,7 +29,7 @@ It adds one entry to `~/.ssh/config`:
 # kubectl-workspace: start <cluster>
 Host *.<cluster>.jk8s
   User jovyan
-  ProxyCommand /path/to/kubectl-workspace connect --stdio --context <context> %h
+  ProxyCommand /path/to/kubectl-workspace connect --stdio --kubeconfig <kubeconfig> --context <context> %h
   ServerAliveInterval 30
   StrictHostKeyChecking accept-new
 # kubectl-workspace: end <cluster>
@@ -39,8 +39,10 @@ Host *.<cluster>.jk8s
 cannot be a host-name label, so the cluster name inside the ARN serves instead, lowercased as well;
 `--cluster-name` picks another name, and later commands read it back from the entry,
 so it is typed once. Running the command again replaces the entry for the same
-cluster name, and `--remove` deletes it. From then on every workspace in the cluster
-is an SSH host:
+cluster name, and `--remove` deletes it. `<kubeconfig>` is the file the context was found
+in, through `--kubeconfig`, `KUBECONFIG` or the default `~/.kube/config`; the entry names it
+because OpenSSH runs the ProxyCommand outside your shell session, where `KUBECONFIG` may
+not be set. From then on every workspace in the cluster is an SSH host:
 
 ```
 ssh <workspace>.<namespace>.<cluster>.jk8s
@@ -66,7 +68,7 @@ extension; Cursor's is `anysphere.remote-ssh`, which a fresh install does not in
                           ws-proxy sidecar --> remote-access-server (SSH) inside the workspace pod
 ```
 
-1. `connect` parses the alias, loads the kubeconfig context named in the entry and
+1. `connect` parses the alias, loads the kubeconfig context from the file named in the entry and
    resolves its credential, running an exec credential plugin itself when the
    kubeconfig has one.
 2. It asks the operator's extension API for an `ssh-over-websocket` connection. The
