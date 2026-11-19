@@ -16,6 +16,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/jupyter-infra/kubectl-workspace/internal/fsutil"
 	"github.com/jupyter-infra/kubectl-workspace/internal/sshconfig"
 )
 
@@ -27,7 +28,7 @@ func commandForEntry(command string) (string, error) {
 	case command == "":
 		return executablePath()
 	case strings.ContainsAny(command, `/\`):
-		return absPath("command", command)
+		return fsutil.Abs("command", command)
 	default:
 		return command, nil
 	}
@@ -42,33 +43,29 @@ func executablePath() (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("failed to locate this binary: %w", err)
 	}
-	if onPath, err := exec.LookPath(filepath.Base(exe)); err == nil && sameFile(onPath, exe) {
+	if onPath, err := exec.LookPath(filepath.Base(exe)); err == nil && fsutil.SameFile(onPath, exe) {
 		return onPath, nil
 	}
 	return exe, nil
 }
 
 // clusterForContext resolves the cluster name in the alias for a context: the
-// --cluster-name flag when given, else the name of the entry already installed for the
-// context and kubeconfig in the SSH configuration file, else the cluster name clusterName
-// derives from the context name. A file that cannot be read, or a damaged entry routing
-// the context, is an error when strict and counts as no entry otherwise: printing needs
-// no readable file, and a write reports the damage after acting on the file. Two
+// --cluster-name flag when given, else the name of the entry installed for the context
+// and kubeconfig file in the SSH configuration, else the cluster name clusterName derives
+// from the context name. The configuration is nil when it could not be read and the
+// command only prints. A damaged entry routing the context is an error when strict and
+// counts as no entry otherwise: a write reports the damage after acting on the file. Two
 // matching entries, or a name edited into a marker by hand, are errors on every path,
 // since the name derived instead could be another cluster's.
-func clusterForContext(flag, contextName, kubeconfig, sshConfigFile string, strict bool) (string, error) {
-	if flag != "" {
+func clusterForContext(flag, contextName, kubeconfig string, file *sshconfig.File, strict bool) (string, error) {
+	if flag != "" || file == nil {
 		return clusterName(flag, contextName)
 	}
-	var clusters []string
-	path, err := sshConfigPath(sshConfigFile)
-	if err == nil {
-		clusters, err = installedClusters(contextName, kubeconfig, path)
-	}
+	clusters, err := installedClusters(contextName, kubeconfig, file)
 	if err != nil && strict {
 		return "", err
 	}
-	cluster, err := pickInstalledCluster(clusters, path, contextName)
+	cluster, err := pickInstalledCluster(clusters, file.Path(), contextName)
 	if err != nil || cluster != "" {
 		return cluster, err
 	}
@@ -93,34 +90,22 @@ func pickInstalledCluster(clusters []string, path, contextName string) (string, 
 		path, contextName, strings.Join(clusters, ", "))
 }
 
-// installedClusters lists the cluster names of the intact entries installed for the
-// context in the file at path, sorted. An entry pinned to another kubeconfig file routes
-// another cluster of the same context name and does not count; entries with the same
-// pin, or none on either side, win over entries pinned on one side only. The error
-// reports a file that cannot be read, or a damaged entry routing the context when no
-// intact one does.
-func installedClusters(contextName, kubeconfig, path string) ([]string, error) {
-	entries, err := sshconfig.EntriesForContext(path, contextName, runtime.GOOS == goosWindows)
-	if err != nil {
-		return nil, err
-	}
-	var same, oneSided []string
+// installedClusters lists the cluster names of the intact entries that route the context
+// in the kubeconfig file, sorted. An entry naming another kubeconfig file routes another
+// cluster of the same context name and does not count. The error is a damaged entry
+// routing the context when no intact one does.
+func installedClusters(contextName, kubeconfig string, file *sshconfig.File) ([]string, error) {
+	var clusters []string
 	var damaged error
-	for _, e := range entries {
+	for _, e := range file.EntriesForContext(contextName) {
 		switch {
 		case e.Damaged != nil:
 			if damaged == nil {
-				damaged = fmt.Errorf("%s: %w", path, e.Damaged)
+				damaged = fmt.Errorf("%s: %w", file.Path(), e.Damaged)
 			}
-		case samePin(e.Kubeconfig, kubeconfig):
-			same = append(same, e.Cluster)
-		case e.Kubeconfig == "" || kubeconfig == "":
-			oneSided = append(oneSided, e.Cluster)
+		case e.Routes(contextName, kubeconfig):
+			clusters = append(clusters, e.Cluster)
 		}
-	}
-	clusters := oneSided
-	if len(same) > 0 {
-		clusters = same
 	}
 	if len(clusters) == 0 {
 		return nil, damaged
@@ -132,35 +117,15 @@ func installedClusters(contextName, kubeconfig, path string) ([]string, error) {
 // warnAboutDamage reports each distinct damage among the entries routing the context,
 // once: OpenSSH still honours the Host line of a block whose markers are broken, and
 // only a hand can repair it.
-func warnAboutDamage(w io.Writer, path, contextName string) {
-	entries, _ := sshconfig.EntriesForContext(path, contextName, runtime.GOOS == goosWindows)
+func warnAboutDamage(w io.Writer, file *sshconfig.File, contextName string) {
 	said := map[string]bool{}
-	for _, e := range entries {
+	for _, e := range file.EntriesForContext(contextName) {
 		if e.Damaged == nil || said[e.Damaged.Error()] {
 			continue
 		}
 		said[e.Damaged.Error()] = true
-		warnf(w, "%s: %v", path, e.Damaged)
+		warnf(w, "%s: %v", file.Path(), e.Damaged)
 	}
-}
-
-// routesAnother reports whether an installed entry routes another cluster than the
-// context and kubeconfig at hand: another context name, or the same name pinned to
-// another kubeconfig file; an unpinned side matches any file. An entry whose
-// ProxyCommand the plugin cannot read is not judged here; the callers refuse it.
-func routesAnother(installed sshconfig.InstalledEntry, contextName, kubeconfig string) bool {
-	if installed.Context == "" {
-		return false
-	}
-	return installed.Context != contextName ||
-		(installed.Kubeconfig != "" && kubeconfig != "" && !samePin(installed.Kubeconfig, kubeconfig))
-}
-
-// samePin reports whether two kubeconfig pins name the same file: the same spelling,
-// or two spellings of one file, as a dotfiles symlink or a case difference on a
-// case-insensitive filesystem gives. An empty pin matches only an empty pin.
-func samePin(a, b string) bool {
-	return a == b || (a != "" && b != "" && sameFile(a, b))
 }
 
 // routeOf names what an entry routes, for messages.
@@ -174,29 +139,10 @@ func routeOf(e sshconfig.InstalledEntry) string {
 // routePair names what two entries route, for a message that contrasts them: the
 // kubeconfig file appears only when it tells them apart.
 func routePair(a, b sshconfig.InstalledEntry) (string, string) {
-	if samePin(a.Kubeconfig, b.Kubeconfig) {
+	if fsutil.SameFile(a.Kubeconfig, b.Kubeconfig) {
 		a.Kubeconfig, b.Kubeconfig = "", ""
 	}
 	return routeOf(a), routeOf(b)
-}
-
-// pinnedKubeconfig returns the kubeconfig pin of an entry, the kubeconfig path its
-// ProxyCommand carries, for the flag: the --kubeconfig value, else a single-file
-// KUBECONFIG, made absolute because OpenSSH runs the ProxyCommand from its own working
-// directory; empty for the default lookup. list reports a KUBECONFIG with several
-// files, which the entry leaves to the environment.
-func pinnedKubeconfig(flag string) (path string, list bool, err error) {
-	env := os.Getenv("KUBECONFIG")
-	switch {
-	case flag != "":
-		path, err = absPath("kubeconfig", flag)
-	case env == "":
-	case strings.Contains(env, string(os.PathListSeparator)):
-		list = true
-	default:
-		path, err = absPath("kubeconfig", env)
-	}
-	return path, list, err
 }
 
 // sshConfigHintArgs returns the flags of a pasted ssh-config hint: the action flag,

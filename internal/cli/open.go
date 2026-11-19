@@ -83,14 +83,14 @@ func (o *openOptions) run(ctx context.Context, workspace string) error {
 	if namespace == "" {
 		namespace = target.Namespace
 	}
-	kubeconfig, _, err := pinnedKubeconfig(o.kubeconfig)
-	if err != nil {
-		return err
-	}
 	// The editor is about to connect through the file, so a damaged entry for the
 	// context or a file that cannot be read stops here, named, instead of the hint to
 	// write a second entry under the derived name; printing needs no file.
-	cluster, err := clusterForContext(o.clusterName, target.Context, kubeconfig, o.sshConfigFile, !o.printOnly)
+	file, err := loadSSHConfig(o.sshConfigFile)
+	if err != nil && !o.printOnly {
+		return err
+	}
+	cluster, err := clusterForContext(o.clusterName, target.Context, target.Kubeconfig, file, !o.printOnly)
 	if err != nil {
 		return err
 	}
@@ -100,7 +100,7 @@ func (o *openOptions) run(ctx context.Context, workspace string) error {
 	}
 	link := editorLink(o.editor, alias, o.remotePath)
 
-	if err := o.checkEntry(cluster, target.Context, kubeconfig); err != nil {
+	if err := o.checkEntry(file, cluster, target.Context, target.Kubeconfig); err != nil {
 		return err
 	}
 	if o.printOnly {
@@ -125,24 +125,22 @@ func (o *openOptions) run(ctx context.Context, workspace string) error {
 // checkEntry fails with the setup command when the cluster has no SSH entry yet, which
 // the editor would otherwise report as an unreachable host, and refuses an entry under
 // the cluster's name that routes another cluster or that the plugin cannot read. In
-// print mode a missing file, a missing entry or damage is tolerated, since printing
-// needs no file; the refusal stays, since the printed alias would land in the other
-// cluster.
-func (o *openOptions) checkEntry(cluster, contextName, kubeconfig string) error {
-	path, err := sshConfigPath(o.sshConfigFile)
-	if err != nil {
-		return o.unlessPrinting(err)
+// print mode a file that could not be read, a missing entry or damage is tolerated,
+// since printing needs no file; the refusal stays, since the printed alias would land in
+// the other cluster.
+func (o *openOptions) checkEntry(file *sshconfig.File, cluster, contextName, kubeconfig string) error {
+	if file == nil {
+		return nil
 	}
-	installed, ok, err := sshconfig.EntryFor(path, cluster, runtime.GOOS == goosWindows)
+	installed, ok, err := file.EntryFor(cluster)
 	if err != nil {
 		return o.unlessPrinting(err)
 	}
 	if !ok {
-		return o.unlessPrinting(fmt.Errorf("%s has no entry for cluster %q; run: %s", path, cluster,
-			kubectlWorkspaceCommand("ssh-config", o.kubeconfig, contextName, cluster,
-				sshConfigHintArgs(writeFlag, o.sshConfigFile)...)))
+		return o.unlessPrinting(fmt.Errorf("%s has no entry for cluster %q; run: %s", file.Path(), cluster,
+			o.writeHint(contextName, cluster)))
 	}
-	return o.refuseOtherCluster(path, installed, cluster, contextName, kubeconfig)
+	return o.refuseOtherCluster(file.Path(), installed, cluster, contextName, kubeconfig)
 }
 
 // unlessPrinting returns err, or nil when the command only prints and needs nothing
@@ -155,8 +153,9 @@ func (o *openOptions) unlessPrinting(err error) error {
 }
 
 // refuseOtherCluster refuses the installed entry under the cluster's name when it routes
-// another cluster, or when the plugin cannot read what it routes, as after a hand edit
-// of its ProxyCommand; --cluster-name, given on purpose, overrides the second.
+// another cluster, with the command that replaces it on purpose, or when the plugin
+// cannot read what it routes, as after a hand edit of its ProxyCommand; --cluster-name,
+// given on purpose, overrides the second.
 func (o *openOptions) refuseOtherCluster(path string, installed sshconfig.InstalledEntry, cluster, contextName,
 	kubeconfig string) error {
 	if installed.Context == "" {
@@ -166,12 +165,19 @@ func (o *openOptions) refuseOtherCluster(path string, installed sshconfig.Instal
 		return fmt.Errorf("%s has an entry for the cluster name %q whose ProxyCommand the plugin cannot read; "+
 			"pass --cluster-name %s to connect through it anyway", path, cluster, cluster)
 	}
-	if routesAnother(installed, contextName, kubeconfig) {
+	if !installed.Routes(contextName, kubeconfig) {
 		theirs, ours := routePair(installed, sshconfig.InstalledEntry{Context: contextName, Kubeconfig: kubeconfig})
-		return fmt.Errorf("%s routes %s under the cluster name %q, not %s; install an entry for it under another "+
-			"name with ssh-config --write --cluster-name", path, theirs, cluster, ours)
+		return fmt.Errorf("%s routes %s under the cluster name %q, not %s; pass --cluster-name to put %s under another "+
+			"name, or replace that entry with: %s", path, theirs, cluster, ours, ours, o.writeHint(contextName, cluster))
 	}
 	return nil
+}
+
+// writeHint is the ssh-config --write command that installs the entry for the cluster, or
+// replaces it on purpose, with the kubeconfig and configuration file open was given.
+func (o *openOptions) writeHint(contextName, cluster string) string {
+	return kubectlWorkspaceCommand("ssh-config", o.kubeconfig, contextName, cluster,
+		sshConfigHintArgs(writeFlag, o.sshConfigFile)...)
 }
 
 // editorLink is VS Code's Remote-SSH link under the editor's scheme; windowId=_blank

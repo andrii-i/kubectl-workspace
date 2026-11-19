@@ -12,6 +12,8 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+
+	"github.com/jupyter-infra/kubectl-workspace/internal/fsutil"
 )
 
 // newFileMode keeps a new configuration file private, as OpenSSH requires.
@@ -26,64 +28,127 @@ func DefaultPath() (string, error) {
 	return filepath.Join(home, ".ssh", "config"), nil
 }
 
-// Install writes the entry into the SSH configuration file at path, creating the
-// file when needed. An existing entry for the same cluster is replaced in place; a
-// new one goes where firstBlock says.
-func Install(path string, e Entry) error {
+// File is an SSH configuration file read once. The lookups answer from what was read,
+// Install and Remove edit it in memory, and Save writes it back in one replace, so a
+// command acts on the file it checked.
+type File struct {
+	// path is the file as named; target is the file OpenSSH reads, through a symlink.
+	path, target      string
+	lines             []string
+	newline           string
+	mode              os.FileMode
+	windows           bool
+	defaultKubeconfig string
+}
+
+// Load reads the configuration file at path; a missing file loads empty. windows selects
+// the quoting the entries were written with. defaultKubeconfig is the file an entry whose
+// ProxyCommand names no --kubeconfig is read as naming: the default location of the process
+// ssh runs in.
+func Load(path string, windows bool, defaultKubeconfig string) (*File, error) {
+	target, err := resolveTarget(path)
+	if err != nil {
+		return nil, err
+	}
+	content, mode, err := read(target)
+	if err != nil {
+		return nil, err
+	}
+	return &File{
+		path: path, target: target, lines: splitLines(content), newline: lineEnding(content), mode: mode,
+		windows: windows, defaultKubeconfig: defaultKubeconfig,
+	}, nil
+}
+
+// Path returns the file as it was named to Load.
+func (f *File) Path() string {
+	return f.path
+}
+
+// Install puts the entry in place of the one installed for its cluster, or where
+// firstBlock says. Save writes the change.
+func (f *File) Install(e Entry) error {
 	if err := e.Validate(); err != nil {
 		return err
 	}
-	path, content, mode, err := load(path)
+	lines, err := merge(f.lines, e)
 	if err != nil {
-		return err
+		return fmt.Errorf("%s: %w", f.path, err)
 	}
-	updated, err := merge(content, e)
-	if err != nil {
-		return fmt.Errorf("%s: %w", path, err)
-	}
-	return write(path, updated, mode)
+	f.lines = lines
+	return nil
 }
 
-// EntryFor returns the entry installed for cluster in the file at path, and whether
-// there is one. windows selects the quoting the entry was written with.
-func EntryFor(path, cluster string, windows bool) (InstalledEntry, bool, error) {
-	path, content, _, err := load(path)
+// Remove deletes the entry for cluster and reports whether there was one. Of the blank
+// lines Install put around the entry, one goes with it, so the file reads as it did before
+// Install. Save writes the change.
+func (f *File) Remove(cluster string) (bool, error) {
+	start, end, err := findEntry(f.lines, cluster)
 	if err != nil {
-		return InstalledEntry{}, false, err
+		return false, fmt.Errorf("%s: %w", f.path, err)
 	}
-	lines := splitLines(content)
-	start, end, err := findEntry(lines, cluster)
+	if start < 0 {
+		return false, nil
+	}
+	out := make([]string, 0, len(f.lines)-(end-start+1))
+	out = append(out, f.lines[:start]...)
+	out = append(out, f.lines[end+1:]...)
+	switch {
+	case start < len(out) && out[start] == "" && (start == 0 || out[start-1] == ""):
+		out = append(out[:start], out[start+1:]...)
+	case start == len(out) && start > 0 && out[start-1] == "":
+		out = out[:start-1]
+	}
+	f.lines = out
+	return true, nil
+}
+
+// Save writes the lines back through a rename, creating the file when needed.
+func (f *File) Save() error {
+	if len(f.lines) == 0 {
+		return write(f.target, "", f.mode)
+	}
+	return write(f.target, strings.Join(f.lines, f.newline)+f.newline, f.mode)
+}
+
+// EntryFor returns the entry installed for cluster, and whether there is one.
+func (f *File) EntryFor(cluster string) (InstalledEntry, bool, error) {
+	start, end, err := findEntry(f.lines, cluster)
 	if err != nil {
-		return InstalledEntry{}, false, fmt.Errorf("%s: %w", path, err)
+		return InstalledEntry{}, false, fmt.Errorf("%s: %w", f.path, err)
 	}
 	if start < 0 {
 		return InstalledEntry{}, false, nil
 	}
-	return readEntry(cluster, lines[start:end+1], windows), true, nil
+	return f.readEntry(cluster, f.lines[start:end+1]), true, nil
 }
 
-// InstalledEntry is what EntryFor and EntriesForContext read back from an entry: its cluster name and
-// the context and kubeconfig file its ProxyCommand runs connect with, the kubeconfig
-// empty when connect uses the default lookup.
+// InstalledEntry is what EntryFor and EntriesForContext read back from an entry: its
+// cluster name, and the context and kubeconfig file its ProxyCommand runs connect with.
 type InstalledEntry struct {
-	Cluster    string
-	Context    string
+	Cluster string
+	// Context is empty when the ProxyCommand names none, as after a hand edit replaced it.
+	Context string
+	// Kubeconfig is the file the ProxyCommand names, or the default file of Load when it
+	// names none; empty with Context.
 	Kubeconfig string
 	// Damaged is the marker error of an entry whose markers do not pair up; its flags
 	// were read as far as the next marker. Nil for an intact entry.
 	Damaged error
 }
 
-// EntriesForContext returns the entries in the file at path whose ProxyCommand runs
-// connect with contextName, in file order. windows selects the quoting the entries
-// were written with. An entry with broken markers comes back with Damaged set, so a
-// lookup can skip it and a command about to act on the file can report it.
-func EntriesForContext(path, contextName string, windows bool) ([]InstalledEntry, error) {
-	_, content, _, err := load(path)
-	if err != nil {
-		return nil, err
-	}
-	lines := splitLines(content)
+// Routes reports whether the entry's ProxyCommand connects to contextName in the
+// kubeconfig file: the same context name, and one file under both spellings. An entry
+// whose ProxyCommand the plugin cannot read routes nothing.
+func (e InstalledEntry) Routes(contextName, kubeconfig string) bool {
+	return e.Context != "" && e.Context == contextName && fsutil.SameFile(e.Kubeconfig, kubeconfig)
+}
+
+// EntriesForContext returns the entries whose ProxyCommand runs connect with
+// contextName, in file order. An entry with broken markers comes back with Damaged set,
+// so a lookup can skip it and a command about to act on the file can report it.
+func (f *File) EntriesForContext(contextName string) []InstalledEntry {
+	lines := f.lines
 	var entries []InstalledEntry
 	for i := 0; i < len(lines); i++ {
 		trimmed := strings.TrimSpace(lines[i])
@@ -116,13 +181,13 @@ func EntriesForContext(path, contextName string, windows bool) ([]InstalledEntry
 		default:
 			continue
 		}
-		entry := readEntry(cluster, block, windows)
+		entry := f.readEntry(cluster, block)
 		entry.Damaged = damaged
 		if entry.Context == contextName {
 			entries = append(entries, entry)
 		}
 	}
-	return entries, nil
+	return entries
 }
 
 // hasMarker reports whether one of the lines is the marker.
@@ -170,7 +235,7 @@ var proxyCommandKeyword = regexp.MustCompile(`(?i)^proxycommand(\s+|\s*=\s*)`)
 // readEntry reads the connect flags out of an entry's ProxyCommand line, however the
 // keyword is spelled. OpenSSH keeps the first value it meets for an option, so the first
 // ProxyCommand line is the entry's.
-func readEntry(cluster string, block []string, windows bool) InstalledEntry {
+func (f *File) readEntry(cluster string, block []string) InstalledEntry {
 	entry := InstalledEntry{Cluster: cluster}
 	for _, line := range block {
 		trimmed := strings.TrimSpace(line)
@@ -178,12 +243,18 @@ func readEntry(cluster string, block []string, windows bool) InstalledEntry {
 		if keyword == nil {
 			continue
 		}
-		args := SplitArgs(trimmed[keyword[1]:], windows)
+		args := SplitArgs(trimmed[keyword[1]:], f.windows)
 		for i := 0; i < len(args); i++ {
 			entry.Context = flagValue(args, i, "--context", entry.Context)
 			entry.Kubeconfig = flagValue(args, i, "--kubeconfig", entry.Kubeconfig)
 		}
 		break
+	}
+	switch {
+	case entry.Context == "":
+		entry.Kubeconfig = ""
+	case entry.Kubeconfig == "":
+		entry.Kubeconfig = f.defaultKubeconfig
 	}
 	return entry
 }
@@ -200,56 +271,12 @@ func flagValue(args []string, i int, flag, current string) string {
 	return current
 }
 
-// Remove deletes the entry for cluster from the file at path and reports whether
-// there was one. Of the blank lines Install put around the entry, one goes with it,
-// so the file reads as it did before Install.
-func Remove(path, cluster string) (bool, error) {
-	path, content, mode, err := load(path)
-	if err != nil {
-		return false, err
-	}
-	lines := splitLines(content)
-	start, end, err := findEntry(lines, cluster)
-	if err != nil {
-		return false, fmt.Errorf("%s: %w", path, err)
-	}
-	if start < 0 {
-		return false, nil
-	}
-	out := make([]string, 0, len(lines)-(end-start+1))
-	out = append(out, lines[:start]...)
-	out = append(out, lines[end+1:]...)
-	switch {
-	case start < len(out) && out[start] == "" && (start == 0 || out[start-1] == ""):
-		out = append(out[:start], out[start+1:]...)
-	case start == len(out) && start > 0 && out[start-1] == "":
-		out = out[:start-1]
-	}
-	if len(out) == 0 {
-		return true, write(path, "", mode)
-	}
-	newline := lineEnding(content)
-	return true, write(path, strings.Join(out, newline)+newline, mode)
-}
-
 // lineEnding returns the line ending the content uses, so a rewrite keeps it.
 func lineEnding(content string) string {
 	if strings.Contains(content, "\r\n") {
 		return "\r\n"
 	}
 	return "\n"
-}
-
-// load follows a symlinked path and reads the file: the path read, its content and
-// its mode.
-func load(path string) (resolved, content string, mode os.FileMode, err error) {
-	if resolved, err = resolveTarget(path); err != nil {
-		return "", "", 0, err
-	}
-	if content, mode, err = read(resolved); err != nil {
-		return "", "", 0, err
-	}
-	return resolved, content, mode, nil
 }
 
 // resolveTarget follows a symlinked configuration file, which dotfiles setups
@@ -315,15 +342,12 @@ func write(path, content string, mode os.FileMode) error {
 	return nil
 }
 
-// merge returns the configuration text with the entry in place.
-func merge(content string, e Entry) (string, error) {
-	newline := lineEnding(content)
-	lines := splitLines(content)
+// merge returns the lines with the entry in place.
+func merge(lines []string, e Entry) ([]string, error) {
 	entry := splitLines(e.Render())
-
 	start, end, err := findEntry(lines, e.Cluster)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 
 	var out []string
@@ -331,7 +355,7 @@ func merge(content string, e Entry) (string, error) {
 		out = append(out, lines[:start]...)
 		out = append(out, entry...)
 		out = append(out, lines[end+1:]...)
-		return strings.Join(out, newline) + newline, nil
+		return out, nil
 	}
 	at := firstBlock(lines)
 	if at < 0 {
@@ -347,7 +371,7 @@ func merge(content string, e Entry) (string, error) {
 		out = append(out, "")
 	}
 	out = append(out, after...)
-	return strings.Join(out, newline) + newline, nil
+	return out, nil
 }
 
 // splitLines splits on either line ending and drops the empty element a trailing

@@ -183,7 +183,7 @@ func TestValidateRejectsLineBreaks(t *testing.T) {
 	if err := entry.Validate(); err == nil || !strings.Contains(err.Error(), "line break") {
 		t.Errorf("Validate() = %v, want a line-break error", err)
 	}
-	if err := Install(filepath.Join(t.TempDir(), "config"), entry); err == nil {
+	if err := install(filepath.Join(t.TempDir(), "config"), entry); err == nil {
 		t.Error("Install accepted an entry that would split into a second directive")
 	}
 	if err := testEntry().Validate(); err != nil {

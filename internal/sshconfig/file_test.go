@@ -18,7 +18,7 @@ import (
 
 func TestInstallCreatesThePrivateFile(t *testing.T) {
 	path := filepath.Join(t.TempDir(), ".ssh", "config")
-	if err := Install(path, testEntry()); err != nil {
+	if err := install(path, testEntry()); err != nil {
 		t.Fatal(err)
 	}
 	if got := readFile(t, path); got != testEntry().Render() {
@@ -37,7 +37,7 @@ func TestInstallWritesThroughASymlinkedFile(t *testing.T) {
 	link := filepath.Join(t.TempDir(), "config")
 	testutil.Symlink(t, target, link)
 
-	if err := Install(link, testEntry()); err != nil {
+	if err := install(link, testEntry()); err != nil {
 		t.Fatal(err)
 	}
 
@@ -52,7 +52,7 @@ func TestInstallWritesThroughASymlinkedFile(t *testing.T) {
 	if got := readFile(t, target); got != want {
 		t.Errorf("target file =\n%s\nwant\n%s", got, want)
 	}
-	if _, ok, err := EntryFor(link, "prod", false); err != nil || !ok {
+	if _, ok, err := entryFor(link, "prod"); err != nil || !ok {
 		t.Errorf("EntryFor through the link = %v, %v", ok, err)
 	}
 }
@@ -104,7 +104,7 @@ func TestInstallPlacesTheEntry(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			path := writeFile(t, tt.existing)
-			if err := Install(path, testEntry()); err != nil {
+			if err := install(path, testEntry()); err != nil {
 				t.Fatal(err)
 			}
 			if got := readFile(t, path); got != tt.want {
@@ -119,7 +119,7 @@ func TestInstallRefusesALinkToAMissingFile(t *testing.T) {
 	link := filepath.Join(dir, "config")
 	testutil.Symlink(t, filepath.Join(dir, "dotfiles", "ssh_config"), link)
 
-	err := Install(link, testEntry())
+	err := install(link, testEntry())
 	if err == nil || !strings.Contains(err.Error(), "link to a missing file") {
 		t.Errorf("Install error = %v, want the dangling link named", err)
 	}
@@ -134,7 +134,7 @@ func TestInstallKeepsEachClusterInsideItsOwnMarkers(t *testing.T) {
 	staging, prod := testEntry(), testEntry()
 	staging.Cluster, prod.Cluster = "staging", "prod"
 	for _, e := range []Entry{staging, prod, staging} {
-		if err := Install(path, e); err != nil {
+		if err := install(path, e); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -154,7 +154,7 @@ func TestInstallKeepsTheFilesMode(t *testing.T) {
 	if err := os.WriteFile(path, []byte("Host github.com\n  User git\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := Install(path, testEntry()); err != nil {
+	if err := install(path, testEntry()); err != nil {
 		t.Fatal(err)
 	}
 	assertMode(t, path, 0o644)
@@ -174,7 +174,7 @@ func TestInstallLeavesTheFileAloneWhenTheDirectoryIsReadOnly(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = os.Chmod(dir, 0o700) })
 
-	err := Install(path, testEntry())
+	err := install(path, testEntry())
 	if err == nil || !strings.Contains(err.Error(), dir) {
 		t.Errorf("Install error = %v, want it to name the directory %s", err, dir)
 	}
@@ -192,7 +192,7 @@ func TestInstallReplacesTheEntryForTheSameCluster(t *testing.T) {
 	existing := "Host github.com\n  User git\n\n" + old.Render() + "\n" + other.Render() + "\nHost *\n  ServerAliveInterval 60\n"
 	path := writeFile(t, existing)
 
-	if err := Install(path, testEntry()); err != nil {
+	if err := install(path, testEntry()); err != nil {
 		t.Fatal(err)
 	}
 
@@ -208,7 +208,7 @@ func TestInstallReplacesTheEntryForTheSameCluster(t *testing.T) {
 
 func TestInstallKeepsCRLF(t *testing.T) {
 	path := writeFile(t, "Host github.com\r\n  User git\r\n")
-	if err := Install(path, testEntry()); err != nil {
+	if err := install(path, testEntry()); err != nil {
 		t.Fatal(err)
 	}
 	got := readFile(t, path)
@@ -222,7 +222,7 @@ func TestInstallKeepsCRLF(t *testing.T) {
 
 func TestInstallRejectsAPartialEntry(t *testing.T) {
 	path := writeFile(t, startMarker("prod")+"\nHost *.prod.jk8s\n  User jovyan\n")
-	err := Install(path, testEntry())
+	err := install(path, testEntry())
 	if err == nil || !strings.Contains(err.Error(), "remove it by hand") {
 		t.Fatalf("Install error = %v, want a request to repair the file by hand", err)
 	}
@@ -233,17 +233,17 @@ func TestInstallRejectsAPartialEntry(t *testing.T) {
 
 func TestEntryFor(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config")
-	if _, ok, err := EntryFor(path, "prod", false); err != nil || ok {
+	if _, ok, err := entryFor(path, "prod"); err != nil || ok {
 		t.Fatalf("EntryFor on a missing file = %v, %v; want false, nil", ok, err)
 	}
-	if err := Install(path, testEntry()); err != nil {
+	if err := install(path, testEntry()); err != nil {
 		t.Fatal(err)
 	}
-	entry, ok, err := EntryFor(path, "prod", false)
+	entry, ok, err := entryFor(path, "prod")
 	if err != nil || !ok || entry.Context != testEntry().Context || entry.Kubeconfig != testEntry().Kubeconfig {
 		t.Errorf("EntryFor after Install = %+v, %v, %v; want the installed entry's context and kubeconfig", entry, ok, err)
 	}
-	if _, ok, err := EntryFor(path, "staging", false); err != nil || ok {
+	if _, ok, err := entryFor(path, "staging"); err != nil || ok {
 		t.Errorf("EntryFor for another cluster = %v, %v; want false, nil", ok, err)
 	}
 }
@@ -258,7 +258,7 @@ func TestEntryForReadsHandEditedSpellings(t *testing.T) {
 		"ProxyCommand = kw connect --stdio --kubeconfig /k --context prod %h",
 	} {
 		path := writeFile(t, startMarker("prod")+"\nHost *.prod.jk8s\n  "+line+"\n"+endMarker("prod")+"\n")
-		entry, ok, err := EntryFor(path, "prod", false)
+		entry, ok, err := entryFor(path, "prod")
 		if err != nil || !ok || entry.Context != "prod" || entry.Kubeconfig != "/k" {
 			t.Errorf("%q: EntryFor = %+v, %v, %v; want context prod and kubeconfig /k", line, entry, ok, err)
 		}
@@ -267,7 +267,7 @@ func TestEntryForReadsHandEditedSpellings(t *testing.T) {
 
 func TestEntryForRejectsAPartialEntry(t *testing.T) {
 	path := writeFile(t, endMarker("prod")+"\n")
-	if _, _, err := EntryFor(path, "prod", false); err == nil || !strings.Contains(err.Error(), "remove it by hand") {
+	if _, _, err := entryFor(path, "prod"); err == nil || !strings.Contains(err.Error(), "remove it by hand") {
 		t.Errorf("EntryFor error = %v, want a request to repair the file by hand", err)
 	}
 }
@@ -295,7 +295,7 @@ func TestDuplicatedMarkersAreDamage(t *testing.T) {
 	for name, content := range tests {
 		t.Run(name, func(t *testing.T) {
 			path := writeFile(t, content)
-			entries, err := EntriesForContext(path, "prod", false)
+			entries, err := entriesForContext(path, "prod")
 			if err != nil || len(entries) == 0 {
 				t.Fatalf("entries = %v, %v; want the entry returned, marked damaged", entries, err)
 			}
@@ -304,10 +304,10 @@ func TestDuplicatedMarkersAreDamage(t *testing.T) {
 					t.Errorf("entry %+v; want cluster prod marked damaged", e)
 				}
 			}
-			if _, err := Remove(path, "prod"); err == nil || !strings.Contains(err.Error(), "by hand") {
+			if _, err := remove(path, "prod"); err == nil || !strings.Contains(err.Error(), "by hand") {
 				t.Errorf("Remove error = %v, want a request to repair the file by hand", err)
 			}
-			if err := Install(path, testEntry()); err == nil || !strings.Contains(err.Error(), "by hand") {
+			if err := install(path, testEntry()); err == nil || !strings.Contains(err.Error(), "by hand") {
 				t.Errorf("Install error = %v, want a request to repair the file by hand", err)
 			}
 			if got := readFile(t, path); got != content {
@@ -362,7 +362,7 @@ func assertMode(t *testing.T, path string, want os.FileMode) {
 
 func TestEntriesForContext(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config")
-	if entries, err := EntriesForContext(path, "prod", false); err != nil || len(entries) != 0 {
+	if entries, err := entriesForContext(path, "prod"); err != nil || len(entries) != 0 {
 		t.Fatalf("missing file: entries = %v, %v; want none, nil", entries, err)
 	}
 	arn := "arn:aws:eks:us-west-2:123456789012:cluster/dev"
@@ -371,7 +371,7 @@ func TestEntriesForContext(t *testing.T) {
 		{Cluster: "dev", Context: arn, Kubeconfig: "/My Files/kubeconfig", Command: "/My Tools/kubectl-workspace", User: DefaultUser},
 		{Cluster: "dev-two", Context: arn, Command: "/opt/kw", User: DefaultUser},
 	} {
-		if err := Install(path, e); err != nil {
+		if err := install(path, e); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -384,7 +384,7 @@ func TestEntriesForContext(t *testing.T) {
 		{arn, []InstalledEntry{{Cluster: "dev-two", Context: arn}, {Cluster: "dev", Context: arn, Kubeconfig: "/My Files/kubeconfig"}}},
 		{"staging", nil},
 	} {
-		entries, err := EntriesForContext(path, tt.context, false)
+		entries, err := entriesForContext(path, tt.context)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -398,10 +398,10 @@ func TestEntriesForContext(t *testing.T) {
 // a lookup can leave it out and a command about to act on the file can report it.
 func TestEntriesForContextMarksADamagedEntry(t *testing.T) {
 	path := writeFile(t, startMarker("broken")+"\n  ProxyCommand kw connect --stdio --context prod %h\n")
-	if err := Install(path, testEntry()); err != nil {
+	if err := install(path, testEntry()); err != nil {
 		t.Fatal(err)
 	}
-	entries, err := EntriesForContext(path, "prod", false)
+	entries, err := entriesForContext(path, "prod")
 	if err != nil || len(entries) != 2 {
 		t.Fatalf("entries = %v, %v; want the damaged and the intact entry", entries, err)
 	}
@@ -432,10 +432,10 @@ func TestRemoveUndoesInstall(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			path := writeFile(t, tt.before)
-			if err := Install(path, testEntry()); err != nil {
+			if err := install(path, testEntry()); err != nil {
 				t.Fatal(err)
 			}
-			removed, err := Remove(path, "prod")
+			removed, err := remove(path, "prod")
 			if err != nil || !removed {
 				t.Fatalf("Remove = %v, %v; want true, nil", removed, err)
 			}
@@ -451,27 +451,27 @@ func TestRemoveLeavesOtherClustersAndReportsAbsence(t *testing.T) {
 	staging := testEntry()
 	staging.Cluster, staging.Context = "staging", "staging"
 	for _, e := range []Entry{testEntry(), staging} {
-		if err := Install(path, e); err != nil {
+		if err := install(path, e); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if removed, err := Remove(path, "prod"); err != nil || !removed {
+	if removed, err := remove(path, "prod"); err != nil || !removed {
 		t.Fatalf("Remove prod = %v, %v", removed, err)
 	}
 	if got := readFile(t, path); got != staging.Render() {
 		t.Errorf("after removing prod:\n%s\nwant the staging entry alone", got)
 	}
-	if removed, err := Remove(path, "prod"); err != nil || removed {
+	if removed, err := remove(path, "prod"); err != nil || removed {
 		t.Errorf("second Remove = %v, %v; want false, nil", removed, err)
 	}
-	if removed, err := Remove(filepath.Join(t.TempDir(), "none"), "prod"); err != nil || removed {
+	if removed, err := remove(filepath.Join(t.TempDir(), "none"), "staging"); err != nil || removed {
 		t.Errorf("Remove on a missing file = %v, %v; want false, nil", removed, err)
 	}
 }
 
 func TestRemoveRejectsAPartialEntry(t *testing.T) {
 	path := writeFile(t, endMarker("prod")+"\n")
-	if _, err := Remove(path, "prod"); err == nil || !strings.Contains(err.Error(), "remove it by hand") {
+	if _, err := remove(path, "prod"); err == nil || !strings.Contains(err.Error(), "remove it by hand") {
 		t.Errorf("error = %v, want a request to repair the file by hand", err)
 	}
 }
@@ -480,11 +480,11 @@ func TestRemoveWritesThroughASymlinkedFile(t *testing.T) {
 	target := writeFile(t, "Host github.com\n  User git\n")
 	link := filepath.Join(t.TempDir(), "config")
 	testutil.Symlink(t, target, link)
-	if err := Install(link, testEntry()); err != nil {
+	if err := install(link, testEntry()); err != nil {
 		t.Fatal(err)
 	}
 
-	if removed, err := Remove(link, "prod"); err != nil || !removed {
+	if removed, err := remove(link, "prod"); err != nil || !removed {
 		t.Fatalf("Remove through the link = %v, %v; want true, nil", removed, err)
 	}
 
@@ -497,5 +497,119 @@ func TestRemoveWritesThroughASymlinkedFile(t *testing.T) {
 	}
 	if got := readFile(t, target); got != "Host github.com\n  User git\n" {
 		t.Errorf("target file =\n%s\nwant the content before Install", got)
+	}
+}
+
+// install, remove, entryFor and entriesForContext run one Load of the file around the
+// call, as a command does.
+func install(path string, e Entry) error {
+	f, err := Load(path, false, "")
+	if err != nil {
+		return err
+	}
+	if err := f.Install(e); err != nil {
+		return err
+	}
+	return f.Save()
+}
+
+func remove(path, cluster string) (bool, error) {
+	f, err := Load(path, false, "")
+	if err != nil {
+		return false, err
+	}
+	removed, err := f.Remove(cluster)
+	if err != nil || !removed {
+		return removed, err
+	}
+	return true, f.Save()
+}
+
+func entryFor(path, cluster string) (InstalledEntry, bool, error) {
+	f, err := Load(path, false, "")
+	if err != nil {
+		return InstalledEntry{}, false, err
+	}
+	return f.EntryFor(cluster)
+}
+
+func entriesForContext(path, contextName string) ([]InstalledEntry, error) {
+	f, err := Load(path, false, "")
+	if err != nil {
+		return nil, err
+	}
+	return f.EntriesForContext(contextName), nil
+}
+
+// An entry routes the context of one kubeconfig file, whatever the file is called; an
+// entry whose ProxyCommand names no file is read as naming the default one.
+func TestRoutes(t *testing.T) {
+	kubeconfig := filepath.Join(t.TempDir(), "kubeconfig")
+	if err := os.WriteFile(kubeconfig, []byte("apiVersion: v1\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(t.TempDir(), "link")
+	testutil.Symlink(t, kubeconfig, link)
+	other := filepath.Join(t.TempDir(), "other")
+	withFile, withoutFile := testEntry(), testEntry()
+	withFile.Kubeconfig = kubeconfig
+	withoutFile.Cluster = "no-file"
+	path := writeFile(t, startMarker("edited")+"\nHost *.edited.jk8s\n  ProxyCommand kw connect --stdio --kubeconfig /k %h\n"+
+		endMarker("edited")+"\n")
+	for _, e := range []Entry{withFile, withoutFile} {
+		if err := install(path, e); err != nil {
+			t.Fatal(err)
+		}
+	}
+	f, err := Load(path, false, other)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tt := range []struct {
+		name, cluster, context, kubeconfig string
+		want                               bool
+	}{
+		{name: "the file it names", cluster: "prod", context: "prod", kubeconfig: kubeconfig, want: true},
+		{name: "the file it names, through a link", cluster: "prod", context: "prod", kubeconfig: link, want: true},
+		{name: "another file", cluster: "prod", context: "prod", kubeconfig: other, want: false},
+		{name: "another context", cluster: "prod", context: "staging", kubeconfig: kubeconfig, want: false},
+		{name: "no file named, the default", cluster: "no-file", context: "prod", kubeconfig: other, want: true},
+		{name: "no file named, not another", cluster: "no-file", context: "prod", kubeconfig: kubeconfig, want: false},
+	} {
+		installed, ok, err := f.EntryFor(tt.cluster)
+		if err != nil || !ok {
+			t.Fatalf("EntryFor(%s) = %v, %v", tt.cluster, ok, err)
+		}
+		if got := installed.Routes(tt.context, tt.kubeconfig); got != tt.want {
+			t.Errorf("%s: Routes(%q, %s) = %v, want %v", tt.name, tt.context, tt.kubeconfig, got, tt.want)
+		}
+	}
+	e, ok, err := f.EntryFor("edited")
+	if err != nil || !ok || e.Routes("prod", other) || e.Kubeconfig != "" {
+		t.Errorf("an entry without a readable context = %+v, %v, %v; want it to route nothing and name no file", e, ok, err)
+	}
+}
+
+// The lookups answer from the one read and the edits reach the file only through Save.
+func TestEditsReachTheFileThroughSave(t *testing.T) {
+	path := writeFile(t, "Host github.com\n  User git\n")
+	f, err := Load(path, false, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Install(testEntry()); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok, err := f.EntryFor("prod"); err != nil || !ok {
+		t.Errorf("EntryFor after Install = %v, %v; want the entry found in memory", ok, err)
+	}
+	if got := readFile(t, path); got != "Host github.com\n  User git\n" {
+		t.Errorf("file before Save =\n%s\nwant it untouched", got)
+	}
+	if err := f.Save(); err != nil {
+		t.Fatal(err)
+	}
+	if got := readFile(t, path); got != testEntry().Render()+"\nHost github.com\n  User git\n" {
+		t.Errorf("file after Save =\n%s\nwant the entry before the block", got)
 	}
 }

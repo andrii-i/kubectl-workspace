@@ -14,6 +14,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/jupyter-infra/kubectl-workspace/internal/kube"
 	"github.com/jupyter-infra/kubectl-workspace/internal/sshconfig"
 	"github.com/jupyter-infra/kubectl-workspace/internal/testutil"
 )
@@ -116,11 +117,12 @@ func TestOpenFailsWithTheSetupCommandWhenTheEntryIsMissing(t *testing.T) {
 	}
 }
 
-// installedEntry writes a configuration file holding the entry for cluster dev.
-func installedEntry(t *testing.T) string {
+// installedEntry writes a configuration file holding the entry for cluster dev of the
+// kubeconfig file.
+func installedEntry(t *testing.T, kubeconfig string) string {
 	t.Helper()
 	configFile := filepath.Join(t.TempDir(), "config")
-	installEntry(t, configFile, sshconfig.Entry{Cluster: "dev", Context: "dev"})
+	installEntry(t, configFile, sshconfig.Entry{Cluster: "dev", Context: "dev", Kubeconfig: kubeconfig})
 	return configFile
 }
 
@@ -129,15 +131,23 @@ func installedEntry(t *testing.T) string {
 func installEntry(t *testing.T, configFile string, entry sshconfig.Entry) {
 	t.Helper()
 	entry.Command, entry.User, entry.Windows = kwCommand, "jovyan", runtime.GOOS == goosWindows
-	if err := sshconfig.Install(configFile, entry); err != nil {
+	file, err := sshconfig.Load(configFile, runtime.GOOS == goosWindows, kube.DefaultKubeconfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := file.Install(entry); err != nil {
+		t.Fatal(err)
+	}
+	if err := file.Save(); err != nil {
 		t.Fatal(err)
 	}
 }
 
-// renderedEntry returns the entry for context dev as ssh-config --write writes it, for a
-// fixture Install would refuse: a name that is no label, or a block about to be damaged.
-func renderedEntry(cluster string) string {
-	return sshconfig.Entry{Cluster: cluster, Context: "dev", Command: kwCommand, User: "jovyan",
+// renderedEntry returns the entry for context dev of the kubeconfig file as ssh-config
+// --write writes it, for a fixture Install would refuse: a name that is no label, or a
+// block about to be damaged.
+func renderedEntry(cluster, kubeconfig string) string {
+	return sshconfig.Entry{Cluster: cluster, Context: "dev", Kubeconfig: kubeconfig, Command: kwCommand, User: "jovyan",
 		Windows: runtime.GOOS == goosWindows}.Render()
 }
 
@@ -185,7 +195,8 @@ func TestOpenChecksTheConnectionThenLaunchesTheEditor(t *testing.T) {
 			kubeconfig := operatorKubeconfig(t, op)
 			launched := recordLaunches(t)
 
-			args := append([]string{"open", "--kubeconfig", kubeconfig, "--ssh-config-file", installedEntry(t)}, tt.args...)
+			args := append([]string{"open", "--kubeconfig", kubeconfig, "--ssh-config-file", installedEntry(t, kubeconfig)},
+				tt.args...)
 			stdout, err := run(t, append(args, "ws1")...)
 			if err != nil {
 				t.Fatal(err)
@@ -211,7 +222,7 @@ func TestOpenDoesNotLaunchWhenTheOperatorRefuses(t *testing.T) {
 	kubeconfig := operatorKubeconfig(t, op)
 	launched := recordLaunches(t)
 
-	_, err := run(t, "open", "--kubeconfig", kubeconfig, "--ssh-config-file", installedEntry(t), "ws1")
+	_, err := run(t, "open", "--kubeconfig", kubeconfig, "--ssh-config-file", installedEntry(t, kubeconfig), "ws1")
 	if err == nil || !strings.Contains(err.Error(), "workspace is not available") {
 		t.Errorf("error = %v, want the operator's message", err)
 	}
@@ -226,7 +237,7 @@ func TestOpenReadsTheClusterNameFromTheInstalledEntry(t *testing.T) {
 	kubeconfig := staticKubeconfig(t)
 	configFile := filepath.Join(t.TempDir(), "config")
 	install := func(cluster string) {
-		installEntry(t, configFile, sshconfig.Entry{Cluster: cluster, Context: testutil.ARNContext})
+		installEntry(t, configFile, sshconfig.Entry{Cluster: cluster, Context: testutil.ARNContext, Kubeconfig: kubeconfig})
 	}
 	open := func() (string, error) {
 		return run(t, "open", "--kubeconfig", kubeconfig, "--context", testutil.ARNContext,
@@ -254,17 +265,19 @@ func TestOpenReadsTheClusterNameFromTheInstalledEntry(t *testing.T) {
 // A marker edited by hand can name a cluster the alias cannot carry; the lookup
 // says so and names the flag, as every other failure to pick a cluster name does.
 func TestOpenRefusesAnEditedEntryWhoseNameIsNoLabel(t *testing.T) {
+	kubeconfig := staticKubeconfig(t)
 	configFile := filepath.Join(t.TempDir(), "config")
-	writeConfig(t, configFile, renderedEntry("My Cluster"))
-	_, err := run(t, "open", "--kubeconfig", staticKubeconfig(t), "--ssh-config-file", configFile, "--print-only", "ws1")
+	writeConfig(t, configFile, renderedEntry("My Cluster", kubeconfig))
+	_, err := run(t, "open", "--kubeconfig", kubeconfig, "--ssh-config-file", configFile, "--print-only", "ws1")
 	if err == nil || !strings.Contains(err.Error(), "cannot be the cluster name in the alias") || !strings.Contains(err.Error(), "--cluster-name") {
 		t.Errorf("error = %v, want the edited name refused with the flag named", err)
 	}
 }
 
-// Two kubeconfig files may name a context alike, so the entry written for the
-// kubeconfig in use wins over one written for another file.
-func TestOpenPrefersTheEntryWrittenForItsKubeconfig(t *testing.T) {
+// Two kubeconfig files may name a context alike; open finds the entry that routes the
+// context in the file in use, named by --kubeconfig or KUBECONFIG, and an entry for
+// another file does not count.
+func TestOpenFindsTheEntryOfTheKubeconfigFileInUse(t *testing.T) {
 	first, second := staticKubeconfig(t), staticKubeconfig(t)
 	configFile := filepath.Join(t.TempDir(), "config")
 	for cluster, kubeconfig := range map[string]string{"first": first, "second": second} {
@@ -276,14 +289,14 @@ func TestOpenPrefersTheEntryWrittenForItsKubeconfig(t *testing.T) {
 			t.Errorf("with %s: stdout = %q, %v; want the alias under %s", kubeconfig, stdout, err, cluster)
 		}
 	}
-	// An entry pinned to another kubeconfig file routes another cluster, so a third
-	// kubeconfig gets the name derived from its context.
+	// An entry for another kubeconfig file does not count, so a third file gets the name
+	// derived from its context.
 	stdout, err := run(t, "open", "--kubeconfig", staticKubeconfig(t), "--ssh-config-file", configFile, "--print-only", "ws1")
 	if err != nil || !strings.Contains(stdout, "ssh ws1.team-a.dev.jk8s\n") {
 		t.Errorf("with a third kubeconfig: stdout = %q, %v; want the derived name", stdout, err)
 	}
 
-	// The entry pins the file KUBECONFIG named at --write, so KUBECONFIG finds it again.
+	// The entry names the file KUBECONFIG named at --write, so KUBECONFIG finds it again.
 	t.Setenv("KUBECONFIG", second)
 	stdout, err = run(t, "open", "--ssh-config-file", configFile, "--print-only", "ws1")
 	if err != nil || !strings.Contains(stdout, "ssh ws1.team-a.second.jk8s\n") {
@@ -292,24 +305,44 @@ func TestOpenPrefersTheEntryWrittenForItsKubeconfig(t *testing.T) {
 }
 
 // The entry under the derived name may route another cluster: another context deriving
-// the same name, or the same context name pinned to another kubeconfig file. open
-// refuses it rather than letting the editor connect through it.
+// the same name, or the same context name in another kubeconfig file, whichever side
+// names the file. open refuses it rather than letting the editor connect through it.
 func TestOpenRefusesAnEntryRoutingAnotherCluster(t *testing.T) {
 	kubeconfig, other := staticKubeconfig(t), staticKubeconfig(t)
+	home := kube.DefaultKubeconfig()
+	useAsDefaultKubeconfig(t, kubeconfig)
 	tests := []struct {
 		name      string
 		installed sshconfig.Entry
+		// args selects the kubeconfig open runs with; none is the default lookup.
+		args      []string
 		wantRoute string
 	}{
 		{
 			name:      "another context deriving the same name",
 			installed: sshconfig.Entry{Cluster: "dev", Context: testutil.ARNContext, Kubeconfig: kubeconfig},
-			wantRoute: `routes context "` + testutil.ARNContext + `" under the cluster name "dev"`,
+			args:      []string{"--kubeconfig", kubeconfig},
+			wantRoute: `routes context "` + testutil.ARNContext + `" under the cluster name "dev", not context "dev"`,
 		},
 		{
-			name:      "the same context name pinned to another kubeconfig",
+			name:      "the same context name in another file",
 			installed: sshconfig.Entry{Cluster: "dev", Context: "dev", Kubeconfig: other},
-			wantRoute: `routes context "dev" of kubeconfig ` + other + ` under the cluster name "dev"`,
+			args:      []string{"--kubeconfig", kubeconfig},
+			wantRoute: `routes context "dev" of kubeconfig ` + other + ` under the cluster name "dev", ` +
+				`not context "dev" of kubeconfig ` + kubeconfig,
+		},
+		{
+			name:      "an entry naming a file while open uses the default lookup",
+			installed: sshconfig.Entry{Cluster: "dev", Context: "dev", Kubeconfig: other},
+			wantRoute: `routes context "dev" of kubeconfig ` + other + ` under the cluster name "dev", ` +
+				`not context "dev" of kubeconfig ` + home,
+		},
+		{
+			name:      "an entry naming no file, read as the default file, while open names one",
+			installed: sshconfig.Entry{Cluster: "dev", Context: "dev"},
+			args:      []string{"--kubeconfig", kubeconfig},
+			wantRoute: `routes context "dev" of kubeconfig ` + home + ` under the cluster name "dev", ` +
+				`not context "dev" of kubeconfig ` + kubeconfig,
 		},
 	}
 	for _, tt := range tests {
@@ -317,14 +350,39 @@ func TestOpenRefusesAnEntryRoutingAnotherCluster(t *testing.T) {
 			configFile := filepath.Join(t.TempDir(), "config")
 			installEntry(t, configFile, tt.installed)
 			// The printed alias would land in the other cluster too, so --print-only refuses alike.
+			var hint string
 			for _, extra := range [][]string{nil, {"--print-only"}} {
-				args := append([]string{"open", "--kubeconfig", kubeconfig, "--ssh-config-file", configFile, "--context", "dev"}, extra...)
+				args := append([]string{"open", "--ssh-config-file", configFile, "--context", "dev"}, tt.args...)
+				args = append(args, extra...)
 				_, err := run(t, append(args, "ws1")...)
 				if err == nil || !strings.Contains(err.Error(), tt.wantRoute) || !strings.Contains(err.Error(), "--cluster-name") {
-					t.Errorf("%v: error = %v, want the entry's route named and the flag", extra, err)
+					t.Fatalf("%v: error = %v, want the entry's route named and the flag", extra, err)
 				}
+				_, hint, _ = strings.Cut(err.Error(), "replace that entry with: ")
+			}
+			// The printed command, run as printed, replaces the entry on purpose; open then goes through.
+			if _, err := run(t, sshconfig.SplitArgs(hint, runtime.GOOS == goosWindows)[2:]...); err != nil {
+				t.Fatalf("the printed command %q failed: %v", hint, err)
+			}
+			args := append([]string{"open", "--ssh-config-file", configFile, "--context", "dev", "--print-only"}, tt.args...)
+			if stdout, err := run(t, append(args, "ws1")...); err != nil || !strings.Contains(stdout, "ssh ws1.team-a.dev.jk8s\n") {
+				t.Errorf("after the printed command: stdout = %q, %v; want the alias under the replaced entry", stdout, err)
 			}
 		})
+	}
+}
+
+// An entry whose ProxyCommand names no kubeconfig file, written by hand or by an earlier
+// build, leaves the file to ssh's environment; open reads it as the default file, so it
+// serves the default lookup.
+func TestOpenReadsAnEntryWithoutAFileAsTheDefaultFile(t *testing.T) {
+	useAsDefaultKubeconfig(t, staticKubeconfig(t))
+	configFile := filepath.Join(t.TempDir(), "config")
+	installEntry(t, configFile, sshconfig.Entry{Cluster: "no-file", Context: "dev"})
+
+	stdout, err := run(t, "open", "--ssh-config-file", configFile, "--print-only", "ws1")
+	if err != nil || !strings.Contains(stdout, "ssh ws1.team-a.no-file.jk8s\n") {
+		t.Errorf("stdout = %q, %v; want the alias under the entry without a file", stdout, err)
 	}
 }
 
@@ -344,18 +402,18 @@ func TestOpenStopsOnADamagedEntryForTheContext(t *testing.T) {
 	}
 }
 
-// A kubeconfig pin is matched as a file: an entry pinned through a dotfiles link is found
-// from the path the link points at.
-func TestOpenMatchesTheKubeconfigPinByFile(t *testing.T) {
+// The entry's kubeconfig file is matched as a file: an entry written through a dotfiles
+// link is found from the path the link points at.
+func TestOpenMatchesTheKubeconfigFileThroughALink(t *testing.T) {
 	kubeconfig := staticKubeconfig(t)
 	link := filepath.Join(t.TempDir(), "kubeconfig")
 	testutil.Symlink(t, kubeconfig, link)
 	configFile := filepath.Join(t.TempDir(), "config")
-	installEntry(t, configFile, sshconfig.Entry{Cluster: "pinned", Context: "dev", Kubeconfig: link})
+	installEntry(t, configFile, sshconfig.Entry{Cluster: "linked", Context: "dev", Kubeconfig: link})
 
 	stdout, err := run(t, "open", "--kubeconfig", kubeconfig, "--ssh-config-file", configFile, "--print-only", "ws1")
-	if err != nil || !strings.Contains(stdout, "ssh ws1.team-a.pinned.jk8s\n") {
-		t.Errorf("stdout = %q, %v; want the alias under the entry pinned through the link", stdout, err)
+	if err != nil || !strings.Contains(stdout, "ssh ws1.team-a.linked.jk8s\n") {
+		t.Errorf("stdout = %q, %v; want the alias under the entry written through the link", stdout, err)
 	}
 }
 
@@ -373,5 +431,23 @@ func TestOpenRefusesAnEntryItCannotRead(t *testing.T) {
 	_, err = run(t, "open", "--kubeconfig", kubeconfig, "--ssh-config-file", configFile, "--cluster-name", "dev", "ws1")
 	if err == nil || strings.Contains(err.Error(), "cannot read") || strings.Contains(err.Error(), "routes") {
 		t.Errorf("with the flag: error = %v; want open past the entry check, failing only at the unreachable operator", err)
+	}
+}
+
+// Printing needs no file: open --print-only prints the derived alias when the SSH
+// configuration cannot be read, and only a launch, which goes through the file, reports it.
+func TestOpenPrintsWithoutReadingTheFile(t *testing.T) {
+	kubeconfig := staticKubeconfig(t)
+	dir := t.TempDir()
+	link := filepath.Join(dir, "config")
+	testutil.Symlink(t, filepath.Join(dir, "dotfiles", "ssh_config"), link)
+
+	stdout, err := run(t, "open", "--kubeconfig", kubeconfig, "--ssh-config-file", link, "--print-only", "ws1")
+	if err != nil || !strings.Contains(stdout, "ssh ws1.team-a.dev.jk8s\n") {
+		t.Errorf("--print-only: stdout = %q, %v; want the derived alias", stdout, err)
+	}
+	_, err = run(t, "open", "--kubeconfig", kubeconfig, "--ssh-config-file", link, "ws1")
+	if err == nil || !strings.Contains(err.Error(), "link to a missing file") {
+		t.Errorf("error = %v, want the link named", err)
 	}
 }

@@ -23,9 +23,9 @@ type Entry struct {
 	Cluster string
 	// Context is the kubeconfig context connect uses for this cluster.
 	Context string
-	// Kubeconfig is the kubeconfig file connect reads, empty for the default
-	// lookup. OpenSSH does not run the ProxyCommand in the user's shell session,
-	// so a file chosen through a flag or KUBECONFIG has to be named here.
+	// Kubeconfig is the kubeconfig file connect reads, the one the context was found in.
+	// OpenSSH runs the ProxyCommand outside the user's shell session, so the file is named
+	// rather than left to KUBECONFIG; empty leaves the flag out.
 	Kubeconfig string
 	// Command is the path of the kubectl-workspace binary.
 	Command string

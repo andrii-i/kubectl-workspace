@@ -14,6 +14,7 @@ import (
 	"io"
 	"os"
 	"os/signal"
+	"runtime"
 	"strings"
 	"syscall"
 	"time"
@@ -73,12 +74,17 @@ func Main(args []string, streams Streams, version string) int {
 	return 0
 }
 
-// sshConfigPath returns the file --ssh-config-file names, or the default.
-func sshConfigPath(flag string) (string, error) {
-	if flag != "" {
-		return flag, nil
+// loadSSHConfig reads the file --ssh-config-file names, or the default, once; a command
+// looks entries up in, and edits, what it read.
+func loadSSHConfig(flag string) (*sshconfig.File, error) {
+	path := flag
+	if path == "" {
+		var err error
+		if path, err = sshconfig.DefaultPath(); err != nil {
+			return nil, err
+		}
 	}
-	return sshconfig.DefaultPath()
+	return sshconfig.Load(path, runtime.GOOS == goosWindows, kube.DefaultKubeconfig())
 }
 
 // newRootCommand builds the command tree.
