@@ -472,7 +472,7 @@ func TestOpenRefusesAContextSplitAcrossKubeconfigFiles(t *testing.T) {
 	for _, extra := range [][]string{nil, {"--print-only"}} {
 		args := append([]string{"open", "--ssh-config-file", configFile, "--context", "dev"}, extra...)
 		_, err := run(t, append(args, "ws1")...)
-		want := "the cluster it names is defined in " + paths[0]
+		want := "the cluster it names is taken from " + paths[0]
 		if err == nil || !strings.Contains(err.Error(), want) || !strings.Contains(err.Error(), "--flatten") {
 			t.Errorf("%v: error = %v; want %q and the merge hint", extra, err, want)
 		}

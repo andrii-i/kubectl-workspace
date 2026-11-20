@@ -91,6 +91,9 @@ the operator's dependency graph out of this binary.
   An entry for the same context name in another file routes another cluster, and
   neither command connects through it or replaces it under a derived name; an entry
   naming no file, written by hand or by an earlier build, is read as naming `~/.kube/config`.
+  `ssh-config` and `open` refuse a context whose cluster or user client-go takes from
+  another `KUBECONFIG` file than the context's own (`Target.StandsAlone`), since `connect`
+  reads the entry's file alone; the message names the merge command.
 - Markers pair up or nothing is touched. `Install`, `Remove` and the lookups refuse a
   file where a cluster's start or end marker is missing, doubled, or encloses another
   entry's marker, and ask for a repair by hand; a lookup leaves such an entry out, and

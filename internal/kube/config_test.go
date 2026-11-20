@@ -145,15 +145,15 @@ func TestStandsAlone(t *testing.T) {
 		{name: "the cluster and the user in the file", own: all(context, cluster, user), other: func(*clientcmdapi.Config) {}},
 		{
 			name: "the user in another file", own: all(context, cluster), other: user,
-			wantErr: "the user it names is defined in",
+			wantErr: "the user it names is taken from",
 		},
 		{
 			name: "the cluster in another file", own: all(context, user), other: cluster,
-			wantErr: "the cluster it names is defined in",
+			wantErr: "the cluster it names is taken from",
 		},
 		{
 			name: "the cluster shadowed by an earlier file", own: all(context, cluster, user), other: cluster, otherFirst: true,
-			wantErr: "the cluster it names is defined in",
+			wantErr: "the cluster it names is taken from",
 		},
 	}
 	for _, tt := range tests {

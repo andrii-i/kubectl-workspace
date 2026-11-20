@@ -87,7 +87,7 @@ func checkStandsAlone(target *kube.Target) error {
 
 // pickInstalledCluster returns the one cluster name among the entries installed for the
 // context, empty when there is none. Two entries need --cluster-name to tell them
-// apart, and a name edited into a marker by hand has to be a label.
+// apart, and a name edited into a marker by hand has to be a host-name label.
 func pickInstalledCluster(clusters []string, path, contextName string) (string, error) {
 	switch len(clusters) {
 	case 0:
@@ -192,7 +192,7 @@ func kubectlWorkspaceCommand(subcommand, kubeconfig, contextName, cluster string
 
 // clusterName resolves the cluster name in the alias: the --cluster-name flag when given, else
 // the context name, or for a context named like an EKS cluster ARN the cluster name
-// inside it, lowercased; either has to be a valid label.
+// inside it, lowercased; either has to be a host-name label.
 func clusterName(flag, contextName string) (string, error) {
 	if flag != "" {
 		return flag, sshconfig.ValidateClusterName(flag)

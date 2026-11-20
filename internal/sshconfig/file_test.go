@@ -558,7 +558,9 @@ func TestRoutes(t *testing.T) {
 	withFile.Kubeconfig = kubeconfig
 	withoutFile.Cluster = "no-file"
 	path := writeFile(t, startMarker("edited")+"\nHost *.edited.jk8s\n  ProxyCommand kw connect --stdio --kubeconfig /k %h\n"+
-		endMarker("edited")+"\n")
+		endMarker("edited")+"\n"+
+		startMarker("relative")+"\nHost *.relative.jk8s\n  ProxyCommand kw connect --stdio --kubeconfig kubeconfig --context prod %h\n"+
+		endMarker("relative")+"\n")
 	for _, e := range []Entry{withFile, withoutFile} {
 		if err := install(path, e); err != nil {
 			t.Fatal(err)
@@ -568,6 +570,7 @@ func TestRoutes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Chdir(filepath.Dir(kubeconfig))
 	for _, tt := range []struct {
 		name, cluster, context, kubeconfig string
 		want                               bool
@@ -578,6 +581,7 @@ func TestRoutes(t *testing.T) {
 		{name: "another context", cluster: "prod", context: "staging", kubeconfig: kubeconfig, want: false},
 		{name: "no file named, the default", cluster: "no-file", context: "prod", kubeconfig: other, want: true},
 		{name: "no file named, not another", cluster: "no-file", context: "prod", kubeconfig: kubeconfig, want: false},
+		{name: "a relative file, from its own directory", cluster: "relative", context: "prod", kubeconfig: kubeconfig, want: false},
 	} {
 		installed, ok, err := f.EntryFor(tt.cluster)
 		if err != nil || !ok {

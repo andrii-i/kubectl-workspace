@@ -102,7 +102,7 @@ func Load(kubeconfigPath, contextName, userAgent string) (*Target, error) {
 func (t *Target) StandsAlone() error {
 	for _, part := range []struct{ what, file string }{{"cluster", t.clusterFile}, {"user", t.userFile}} {
 		if part.file != "" && !fsutil.SameFile(part.file, t.Kubeconfig) {
-			return fmt.Errorf("context %q is defined in %s but the %s it names is defined in %s", t.Context, t.Kubeconfig,
+			return fmt.Errorf("context %q is defined in %s but the %s it names is taken from %s", t.Context, t.Kubeconfig,
 				part.what, part.file)
 		}
 	}

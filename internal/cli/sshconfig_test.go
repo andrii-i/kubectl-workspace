@@ -695,7 +695,7 @@ func TestSSHConfigRefusesAContextSplitAcrossKubeconfigFiles(t *testing.T) {
 	t.Setenv("KUBECONFIG", strings.Join(paths, string(os.PathListSeparator)))
 
 	_, err := run(t, "ssh-config", "--command", kwCommand)
-	want := "the user it names is defined in " + paths[1]
+	want := "the user it names is taken from " + paths[1]
 	if err == nil || !strings.Contains(err.Error(), want) || !strings.Contains(err.Error(), "--flatten") {
 		t.Errorf("error = %v; want %q and the merge hint", err, want)
 	}

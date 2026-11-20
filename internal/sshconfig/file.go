@@ -139,9 +139,11 @@ type InstalledEntry struct {
 
 // Routes reports whether the entry's ProxyCommand connects to contextName in the
 // kubeconfig file: the same context name, and one file under both spellings. An entry
-// whose ProxyCommand the plugin cannot read routes nothing.
+// whose ProxyCommand the plugin cannot read routes nothing, and so does one naming a
+// relative file, which connect would resolve against OpenSSH's working directory.
 func (e InstalledEntry) Routes(contextName, kubeconfig string) bool {
-	return e.Context != "" && e.Context == contextName && fsutil.SameFile(e.Kubeconfig, kubeconfig)
+	return e.Context != "" && e.Context == contextName && filepath.IsAbs(e.Kubeconfig) &&
+		fsutil.SameFile(e.Kubeconfig, kubeconfig)
 }
 
 // EntriesForContext returns the entries whose ProxyCommand runs connect with
