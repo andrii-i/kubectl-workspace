@@ -14,6 +14,8 @@ import (
 	"strings"
 	"testing"
 
+	clientcmdapi "k8s.io/client-go/tools/clientcmd/api"
+
 	"github.com/jupyter-infra/kubectl-workspace/internal/kube"
 	"github.com/jupyter-infra/kubectl-workspace/internal/sshconfig"
 	"github.com/jupyter-infra/kubectl-workspace/internal/testutil"
@@ -449,5 +451,30 @@ func TestOpenPrintsWithoutReadingTheFile(t *testing.T) {
 	_, err = run(t, "open", "--kubeconfig", kubeconfig, "--ssh-config-file", link, "ws1")
 	if err == nil || !strings.Contains(err.Error(), "link to a missing file") {
 		t.Errorf("error = %v, want the link named", err)
+	}
+}
+
+// Under a KUBECONFIG list an earlier file can define the cluster a later file's context
+// names; open would check the workspace in that cluster while the editor's ssh, reading the
+// entry's file alone, reaches the context's own. open stops with the way to merge the files.
+func TestOpenRefusesAContextSplitAcrossKubeconfigFiles(t *testing.T) {
+	own, other := clientcmdapi.NewConfig(), clientcmdapi.NewConfig()
+	own.Contexts["dev"] = &clientcmdapi.Context{Cluster: "dev", AuthInfo: "dev", Namespace: "team-a"}
+	own.Clusters["dev"] = &clientcmdapi.Cluster{Server: "https://127.0.0.1:1"}
+	own.AuthInfos["dev"] = &clientcmdapi.AuthInfo{Token: "t"}
+	own.CurrentContext = "dev"
+	other.Clusters["dev"] = &clientcmdapi.Cluster{Server: "https://127.0.0.1:2"}
+	paths := writeKubeconfigs(t, other, own)
+	t.Setenv("KUBECONFIG", strings.Join(paths, string(os.PathListSeparator)))
+	configFile := filepath.Join(t.TempDir(), "config")
+	installEntry(t, configFile, sshconfig.Entry{Cluster: "dev", Context: "dev", Kubeconfig: paths[1]})
+
+	for _, extra := range [][]string{nil, {"--print-only"}} {
+		args := append([]string{"open", "--ssh-config-file", configFile, "--context", "dev"}, extra...)
+		_, err := run(t, append(args, "ws1")...)
+		want := "the cluster it names is defined in " + paths[0]
+		if err == nil || !strings.Contains(err.Error(), want) || !strings.Contains(err.Error(), "--flatten") {
+			t.Errorf("%v: error = %v; want %q and the merge hint", extra, err, want)
+		}
 	}
 }

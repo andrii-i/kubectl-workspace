@@ -17,6 +17,7 @@ import (
 	"strings"
 
 	"github.com/jupyter-infra/kubectl-workspace/internal/fsutil"
+	"github.com/jupyter-infra/kubectl-workspace/internal/kube"
 	"github.com/jupyter-infra/kubectl-workspace/internal/sshconfig"
 )
 
@@ -70,6 +71,18 @@ func clusterForContext(flag, contextName, kubeconfig string, file *sshconfig.Fil
 		return cluster, err
 	}
 	return clusterName("", contextName)
+}
+
+// checkStandsAlone makes sure connect resolves the context from the entry's kubeconfig
+// file alone the way the command just did: under a KUBECONFIG list, the context's cluster
+// or user can come from another file than the context, and open would then check the
+// workspace in one cluster while the editor's ssh reaches another.
+func checkStandsAlone(target *kube.Target) error {
+	if err := target.StandsAlone(); err != nil {
+		return fmt.Errorf("%w; connect reads the entry's kubeconfig file alone, so merge the files into one, "+
+			"for example with `kubectl config view --flatten`, and pass it as --kubeconfig", err)
+	}
+	return nil
 }
 
 // pickInstalledCluster returns the one cluster name among the entries installed for the

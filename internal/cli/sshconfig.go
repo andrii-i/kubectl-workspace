@@ -14,7 +14,6 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/jupyter-infra/kubectl-workspace/internal/fsutil"
-	"github.com/jupyter-infra/kubectl-workspace/internal/kube"
 	"github.com/jupyter-infra/kubectl-workspace/internal/sshconfig"
 	"github.com/jupyter-infra/kubectl-workspace/internal/tunnel"
 )
@@ -276,15 +275,4 @@ func (o *sshConfigOptions) entry(file *sshconfig.File) (sshconfig.Entry, error) 
 		return sshconfig.Entry{}, err
 	}
 	return entry, nil
-}
-
-// checkStandsAlone makes sure connect resolves the context from the entry's kubeconfig
-// file alone the way the command just did: under a KUBECONFIG list, the context's cluster
-// or user can come from another file than the context.
-func checkStandsAlone(target *kube.Target) error {
-	if err := target.StandsAlone(); err != nil {
-		return fmt.Errorf("%w; connect reads the entry's kubeconfig file alone, so merge the files into one, "+
-			"for example with `kubectl config view --flatten`, and pass it as --kubeconfig", err)
-	}
-	return nil
 }

@@ -29,6 +29,10 @@ func TestSameFile(t *testing.T) {
 	}
 	link := filepath.Join(t.TempDir(), "link")
 	testutil.Symlink(t, file, link)
+	other := filepath.Join(filepath.Dir(file), "other")
+	if err := os.WriteFile(other, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	missing := filepath.Join(t.TempDir(), "missing")
 	for _, tt := range []struct {
 		name, a, b string
@@ -36,7 +40,7 @@ func TestSameFile(t *testing.T) {
 	}{
 		{name: "one spelling", a: file, b: file, want: true},
 		{name: "a link and its target", a: link, b: file, want: true},
-		{name: "two files", a: file, b: filepath.Join(filepath.Dir(file), "other"), want: false},
+		{name: "two files", a: file, b: other, want: false},
 		{name: "a missing file under one spelling", a: missing, b: missing, want: true},
 		{name: "a missing file and an existing one", a: missing, b: file, want: false},
 	} {

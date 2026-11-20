@@ -551,6 +551,9 @@ func TestRoutes(t *testing.T) {
 	link := filepath.Join(t.TempDir(), "link")
 	testutil.Symlink(t, kubeconfig, link)
 	other := filepath.Join(t.TempDir(), "other")
+	if err := os.WriteFile(other, []byte("apiVersion: v1\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	withFile, withoutFile := testEntry(), testEntry()
 	withFile.Kubeconfig = kubeconfig
 	withoutFile.Cluster = "no-file"

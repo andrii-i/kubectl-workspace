@@ -12,7 +12,6 @@ import (
 	"strings"
 	"testing"
 
-	"k8s.io/client-go/tools/clientcmd"
 	clientcmdapi "k8s.io/client-go/tools/clientcmd/api"
 
 	"github.com/jupyter-infra/kubectl-workspace/internal/kube"
@@ -687,22 +686,16 @@ func TestSSHConfigWritesTheKubeconfigFileIntoTheEntry(t *testing.T) {
 // the context; the entry names one file, which connect reads alone, so the write stops
 // with the way to merge the files. The ways a context can be split are pinned in kube.
 func TestSSHConfigRefusesAContextSplitAcrossKubeconfigFiles(t *testing.T) {
-	dir := t.TempDir()
 	own, other := clientcmdapi.NewConfig(), clientcmdapi.NewConfig()
 	own.Contexts["dev"] = &clientcmdapi.Context{Cluster: "dev", AuthInfo: "dev"}
 	own.Clusters["dev"] = &clientcmdapi.Cluster{Server: "https://127.0.0.1:1"}
 	own.CurrentContext = "dev"
 	other.AuthInfos["dev"] = &clientcmdapi.AuthInfo{Token: "t"}
-	ownPath, otherPath := filepath.Join(dir, "own"), filepath.Join(dir, "other")
-	for path, config := range map[string]*clientcmdapi.Config{ownPath: own, otherPath: other} {
-		if err := clientcmd.WriteToFile(*config, path); err != nil {
-			t.Fatal(err)
-		}
-	}
-	t.Setenv("KUBECONFIG", ownPath+string(os.PathListSeparator)+otherPath)
+	paths := writeKubeconfigs(t, own, other)
+	t.Setenv("KUBECONFIG", strings.Join(paths, string(os.PathListSeparator)))
 
 	_, err := run(t, "ssh-config", "--command", kwCommand)
-	want := "the user it names is defined in " + otherPath
+	want := "the user it names is defined in " + paths[1]
 	if err == nil || !strings.Contains(err.Error(), want) || !strings.Contains(err.Error(), "--flatten") {
 		t.Errorf("error = %v; want %q and the merge hint", err, want)
 	}

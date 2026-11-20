@@ -79,6 +79,9 @@ func (o *openOptions) run(ctx context.Context, workspace string) error {
 	if err != nil {
 		return err
 	}
+	if err := checkStandsAlone(target); err != nil {
+		return err
+	}
 	namespace := o.namespace
 	if namespace == "" {
 		namespace = target.Namespace
